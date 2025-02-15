@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=54", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "h5tui"
+dynamic = ["version"]
+dependencies = [
+  "textual",
+  "h5py",
+]
+authors = [
+  {name = "Kalman Szenes", email =  "szenes.kalman@gmail.com"}
+]
+description = "TUI application for navigating and viewing HDF5 files"
+readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent"
+]
+
+[project.urls]
+Repository = "https://github.com/kszenes/h5tui"
+
+[project.scripts]
+h5tui = "h5tui.h5tui:h5tui"
+
+[tools.dist.bdist_wheel]
+universal = true
+
+[tool.setuptools]
+include-package-data = true
+[tool.setuptools.dynamic]
+version = {attr = "h5tui.__version__"}

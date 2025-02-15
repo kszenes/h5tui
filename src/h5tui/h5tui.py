@@ -3,11 +3,11 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, OptionList, Static
 from textual.containers import VerticalScroll, Horizontal
 from textual.binding import Binding
-from textual.reactive import reactive
-import argparse
 
 import h5py
+
 import os
+import argparse
 
 
 class MyOptionList(OptionList):
@@ -21,6 +21,7 @@ class MyOptionList(OptionList):
 
 class ColumnContent(VerticalScroll):
     """Column which displays a dataset"""
+
     def compose(self):
         self._content = Static()
         yield self._content
@@ -31,6 +32,7 @@ class ColumnContent(VerticalScroll):
 
 class ColumnOption(Widget):
     """Column which shows directory structure and selector"""
+
     BINDINGS = [
         ("left,h", "goto_parent", "Parent Directory"),
         ("right,l", "goto_child", "Select"),
@@ -72,7 +74,7 @@ class ColumnOption(Widget):
 
     def action_goto_parent(self) -> None:
         """Either displays parent or hides dataset"""
-        has_parent_dir = self._cur_dir != '/'
+        has_parent_dir = self._cur_dir != "/"
         if has_parent_dir and not self._dir_hidden:
             self._cur_dir = os.path.dirname(self._cur_dir)
             self._path_widget.update(f"Path: {self._cur_dir}")
@@ -101,7 +103,7 @@ class ColumnOption(Widget):
                     self._content_widget.update(self._file[path][...])
 
 
-class H5TUI(App):
+class H5TUIApp(App):
     """Simple tui application for displaying and navigating h5 files"""
 
     BINDINGS = [("d", "toggle_dark", "Toggle dark mode"), ("q", "quit", "Quit")]
@@ -125,10 +127,14 @@ class H5TUI(App):
         )
 
 
-if __name__ == "__main__":
+def h5tui():
     parser = argparse.ArgumentParser(description="H5TUI")
     parser.add_argument("file", type=str, action="store", help="HDF5 File")
     args = parser.parse_args()
     h5file = args.file
     if h5py.is_hdf5(h5file):
-        H5TUI(h5file).run()
+        H5TUIApp(h5file).run()
+
+
+if __name__ == "__main__":
+    h5tui()
