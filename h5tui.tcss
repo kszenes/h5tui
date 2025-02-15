@@ -1,0 +1,17 @@
+#list-widget {
+    dock: top;
+}
+
+#content {
+    dock: top;
+    display: none;
+}
+
+.view-dataset #dirs {
+  display: none;
+}
+
+.view-dataset #content {
+  display: block;
+}
+
