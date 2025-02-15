@@ -23,10 +23,14 @@ class ColumnContent(VerticalScroll):
     """Column which displays a dataset"""
 
     def compose(self):
+        self._header = Static()
         self._content = Static()
+
+        yield self._header
         yield self._content
 
-    def update(self, value):
+    def update(self, path, name, shape, value):
+        self._header.update(f"Path: {path}\nDataset: {name} {shape}")
         self._content.update(f"{value}")
 
 
@@ -100,7 +104,14 @@ class ColumnOption(Widget):
                     self.add_class("view-dataset")
                     self._dir_hidden = True
 
-                    self._content_widget.update(self._file[path][...])
+                    dset = self._file[path]
+                    dset_name = os.path.basename(path)
+                    dset_shape = dset.shape
+                    dset_values = dset[...]
+
+                    self._content_widget.update(
+                        self._cur_dir, dset_name, dset_shape, dset_values
+                    )
 
 
 class H5TUIApp(App):
