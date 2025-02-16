@@ -92,6 +92,7 @@ class H5TUIApp(App):
         self._dirs = self.get_dir_content(self._cur_dir)
 
         self._prev_highlighted = 0
+
         self.truncate_print = True
         self.suppress_print = False
 
@@ -163,6 +164,7 @@ class H5TUIApp(App):
                     )
                 else:
                     self.update_content(path)
+                    self._column1._content_widget.action_scroll_home()
 
     def action_truncate_print(self):
         self.truncate_print = not self.truncate_print
@@ -184,7 +186,7 @@ class H5TUIApp(App):
 
 def h5tui():
     parser = argparse.ArgumentParser(description="H5TUI")
-    parser.add_argument("file", type=str, action="store", help="HDF5 File")
+    parser.add_argument("file", type=str, action="store", help="HDF5 file")
     args = parser.parse_args()
     h5file = args.file
     if h5py.is_hdf5(h5file):
