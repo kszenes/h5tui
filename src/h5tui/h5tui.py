@@ -74,8 +74,8 @@ class H5TUIApp(App):
     BINDINGS = [
         Binding("i", "toggle_dark", "Toggle dark mode"),
         Binding("q", "quit", "Quit"),
-        Binding("left,h", "goto_parent", "Parent Directory", show=True),
-        Binding("right,l", "goto_child", "Select", show=True),
+        Binding("left,h", "goto_parent", "Parent Directory", show=True, priority=True),
+        Binding("right,l", "goto_child", "Select", show=True, priority=True),
         Binding("t", "truncate_print", "Truncate print", show=False),
         Binding("s", "suppress_print", "Suppress print", show=False),
     ]
