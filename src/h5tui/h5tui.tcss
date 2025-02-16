@@ -1,10 +1,18 @@
 #list-widget {
-    dock: top;
+  dock: top;
 }
 
 #content {
-    dock: top;
-    display: none;
+  dock: top;
+  display: none;
+  border: tall $secondary;
+  background: $boost;
+  max-height: 80%;
+  padding: 0 1;
+}
+
+OptionList {
+  max-height: 80%;
 }
 
 .view-dataset #dirs {
@@ -15,13 +23,9 @@
   display: block;
 }
 
-Static {
+#header {
   background: $boost;
-  border: tall $secondary;
-  margin: 1 0;
+  border: tall $success;
   padding: 0 1;
-}
-
-.header {
-  border: tall $secondary;
+  margin: 1 0;
 }
