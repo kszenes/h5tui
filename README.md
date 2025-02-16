@@ -21,7 +21,7 @@ pip install h5tui
 Simply launch the application with an HDF5 file as an argument:
 
 ```sh
-h5tui hdf5_file
+h5tui file.h5
 ```
 
 ## File Navigation
