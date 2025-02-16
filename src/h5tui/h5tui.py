@@ -159,12 +159,9 @@ class H5TUIApp(App):
                     self._prev_highlighted = highlighted
                     self._cur_dir = path
                     self._header_widget.update(f"Path: {self._cur_dir}")
-                    self._column1.update_list(
-                        self.get_dir_content(self._cur_dir), self._prev_highlighted
-                    )
+                    self._column1.update_list(self.get_dir_content(self._cur_dir), 0)
                 else:
                     self.update_content(path)
-                    self._column1._content_widget.action_scroll_home()
 
     def action_truncate_print(self):
         self.truncate_print = not self.truncate_print
