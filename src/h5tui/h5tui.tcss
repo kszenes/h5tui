@@ -15,3 +15,13 @@
   display: block;
 }
 
+Static {
+  background: $boost;
+  border: tall $secondary;
+  margin: 1 0;
+  padding: 0 1;
+}
+
+.header {
+  border: tall $secondary;
+}
