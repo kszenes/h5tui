@@ -26,6 +26,8 @@ class ColumnContent(VerticalScroll):
     BINDINGS = [
         Binding("down,j", "scroll_down", "Down", show=True),
         Binding("up,k", "scroll_up", "Up", show=True),
+        Binding("u", "page_up", "Bottom", show=False),
+        Binding("d", "page_down", "Bottom", show=False),
         Binding("G", "scroll_end", "Bottom", show=False),
         Binding("g", "scroll_home", "Top", show=False),
     ]
@@ -70,11 +72,12 @@ class H5TUIApp(App):
     """Simple tui application for displaying and navigating h5 files"""
 
     BINDINGS = [
-        Binding("d", "toggle_dark", "Toggle dark mode"),
+        Binding("i", "toggle_dark", "Toggle dark mode"),
         Binding("q", "quit", "Quit"),
         Binding("left,h", "goto_parent", "Parent Directory", show=True),
         Binding("right,l", "goto_child", "Select", show=True),
         Binding("t", "truncate_print", "Truncate print", show=False),
+        Binding("s", "suppress_print", "Suppress print", show=False),
     ]
     CSS_PATH = "h5tui.tcss"
     TITLE = "h5tui"
@@ -90,6 +93,7 @@ class H5TUIApp(App):
 
         self._prev_highlighted = 0
         self.truncate_print = True
+        self.suppress_print = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -167,6 +171,14 @@ class H5TUIApp(App):
             np.set_printoptions(threshold=default_numpy_truncate)
         else:
             np.set_printoptions(threshold=sys.maxsize)
+        self._column1._content_widget.reprint()
+
+    def action_suppress_print(self):
+        self.suppress_print = not self.suppress_print
+        if self.suppress_print:
+            np.set_printoptions(suppress=True)
+        else:
+            np.set_printoptions(suppress=False)
         self._column1._content_widget.reprint()
 
 

@@ -5,7 +5,7 @@
 #content {
   dock: top;
   display: none;
-  border: tall $secondary;
+  border: tall $primary;
   background: $boost;
   max-height: 80%;
   padding: 0 1;
