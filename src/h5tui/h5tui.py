@@ -11,10 +11,6 @@ import os
 import argparse
 
 
-def add_escape_chars(string: str):
-    return string.replace("[", r"\[")
-
-
 class MyOptionList(OptionList):
     BINDINGS = [
         Binding("down,j", "cursor_down", "Down", show=True),
@@ -56,8 +52,7 @@ class Column(Container):
     def __init__(self, dirs, focus=False):
         super().__init__()
         self._focus = focus
-        escaped_dirs = [add_escape_chars(dir) for dir in dirs]
-        self._selector_widget = MyOptionList(*escaped_dirs, id="dirs")
+        self._selector_widget = MyOptionList(*dirs, id="dirs")
         self._content_widget = ColumnContent(id="content")
 
     def compose(self):
@@ -69,8 +64,7 @@ class Column(Container):
     def update_list(self, dirs, prev_highlighted):
         """Redraw option list with contents of current directory"""
         self._selector_widget.clear_options()
-        escaped_dirs = [add_escape_chars(dir) for dir in dirs]
-        self._selector_widget.add_options(escaped_dirs)
+        self._selector_widget.add_options(dirs)
         self._selector_widget.highlighted = prev_highlighted
 
 
@@ -109,8 +103,21 @@ class H5TUIApp(App):
         self._header_widget = Static("/", id="header")
         yield self._header_widget
         with Horizontal():
-            self._column1 = Column(self._dirs, focus=True)
+            dir_with_metadata = self.add_dir_metadata()
+            self._column1 = Column(dir_with_metadata, focus=True)
             yield self._column1
+
+    def group_or_dataset(self, elem):
+        h5elem = self._file[self._cur_dir + f"/{elem}"]
+        if isinstance(h5elem, h5py.Group):
+            return "📁  "
+        if isinstance(h5elem, h5py.Dataset):
+            return "📊  "
+        return ""
+
+    def add_dir_metadata(self):
+        items = list(self._file[self._cur_dir].keys())
+        return [self.group_or_dataset(item) + item for item in items]
 
     def get_dir_content(self, dir) -> list[str]:
         """Return contents of current path"""
@@ -142,9 +149,7 @@ class H5TUIApp(App):
         if has_parent_dir and not self.has_class("view-dataset"):
             self._cur_dir = os.path.dirname(self._cur_dir)
             self._header_widget.update(f"Path: {self._cur_dir}")
-            self._column1.update_list(
-                self.get_dir_content(self._cur_dir), self._prev_highlighted
-            )
+            self._column1.update_list(self.add_dir_metadata(), self._prev_highlighted)
         self.remove_class("view-dataset")
         self.update_header(f"Path: {self._cur_dir}")
 
@@ -152,20 +157,17 @@ class H5TUIApp(App):
         """Either displays child or dataset"""
         highlighted = self._column1._selector_widget.highlighted
         if highlighted is not None:
-            path = os.path.join(
-                self._cur_dir,
-                str(
-                    self._column1._selector_widget.get_option_at_index(
-                        highlighted
-                    ).prompt
-                ),
-            )
+            selected_item = self._column1._selector_widget.get_option_at_index(
+                highlighted
+            ).prompt.split()[-1]
+            path = os.path.join(self._cur_dir, selected_item)
+
             if path in self._file:
                 if isinstance(self._file[path], h5py.Group):
                     self._prev_highlighted = highlighted
                     self._cur_dir = path
                     self._header_widget.update(f"Path: {self._cur_dir}")
-                    self._column1.update_list(self.get_dir_content(self._cur_dir), 0)
+                    self._column1.update_list(self.add_dir_metadata(), 0)
                 else:
                     self.update_content(path)
 
@@ -176,10 +178,10 @@ class H5TUIApp(App):
             if self.truncate_print:
                 default_numpy_truncate = 1000
                 np.set_printoptions(threshold=default_numpy_truncate)
-                self.notify("Print option: Truncation = True", timeout=2)
+                self.notify("Truncation Enabled", timeout=2)
             else:
                 np.set_printoptions(threshold=sys.maxsize)
-                self.notify("Print option: Truncation = False", timeout=2)
+                self.notify("Truncation Disabled", timeout=2)
             self._column1._content_widget.reprint()
 
     def action_suppress_print(self):
@@ -188,10 +190,10 @@ class H5TUIApp(App):
             self.suppress_print = not self.suppress_print
             if self.suppress_print:
                 np.set_printoptions(suppress=True)
-                self.notify("Print option: Suppress = True", timeout=2)
+                self.notify("Suppression Enabled", timeout=2)
             else:
                 np.set_printoptions(suppress=False)
-                self.notify("Print option: Suppress = False", timeout=1)
+                self.notify("Suppression Disabled", timeout=1)
             self._column1._content_widget.reprint()
 
 
