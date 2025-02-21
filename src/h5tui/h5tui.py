@@ -95,6 +95,7 @@ class H5TUIApp(App):
 
         self.truncate_print = True
         self.suppress_print = False
+        np.set_printoptions(linewidth=self.size.width)
 
     def compose(self) -> ComposeResult:
         yield Header()
