@@ -176,8 +176,10 @@ class H5TUIApp(App):
             if self.truncate_print:
                 default_numpy_truncate = 1000
                 np.set_printoptions(threshold=default_numpy_truncate)
+                self.notify("Print option: Truncation = True", timeout=2)
             else:
                 np.set_printoptions(threshold=sys.maxsize)
+                self.notify("Print option: Truncation = False", timeout=2)
             self._column1._content_widget.reprint()
 
     def action_suppress_print(self):
@@ -186,8 +188,10 @@ class H5TUIApp(App):
             self.suppress_print = not self.suppress_print
             if self.suppress_print:
                 np.set_printoptions(suppress=True)
+                self.notify("Print option: Suppress = True", timeout=2)
             else:
                 np.set_printoptions(suppress=False)
+                self.notify("Print option: Suppress = False", timeout=1)
             self._column1._content_widget.reprint()
 
 
