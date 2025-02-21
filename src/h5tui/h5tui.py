@@ -10,6 +10,8 @@ import sys
 import os
 import argparse
 
+UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
+
 
 class MyOptionList(OptionList):
     BINDINGS = [
@@ -110,11 +112,16 @@ class H5TUIApp(App):
 
     def group_or_dataset(self, elem):
         h5elem = self._file[self._cur_dir + f"/{elem}"]
-        if isinstance(h5elem, h5py.Group):
-            return "📁  "
-        if isinstance(h5elem, h5py.Dataset):
-            return "📊  "
-        return ""
+        if UNICODE_SUPPORT:
+            if isinstance(h5elem, h5py.Group):
+                return "📁  "
+            if isinstance(h5elem, h5py.Dataset):
+                return "📊  "
+        else:
+            if isinstance(h5elem, h5py.Group):
+                return "(Group)    "
+            if isinstance(h5elem, h5py.Dataset):
+                return "(DataSet)  "
 
     def add_dir_metadata(self):
         items = list(self._file[self._cur_dir].keys())
