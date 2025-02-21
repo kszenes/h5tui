@@ -170,6 +170,7 @@ class H5TUIApp(App):
                     self.update_content(path)
 
     def action_truncate_print(self):
+        """Change numpy printing by toggling truncation"""
         if self.has_class("view-dataset"):
             self.truncate_print = not self.truncate_print
             if self.truncate_print:
@@ -180,6 +181,7 @@ class H5TUIApp(App):
             self._column1._content_widget.reprint()
 
     def action_suppress_print(self):
+        """Change numpy printing by suppression"""
         if self.has_class("view-dataset"):
             self.suppress_print = not self.suppress_print
             if self.suppress_print:
@@ -189,12 +191,27 @@ class H5TUIApp(App):
             self._column1._content_widget.reprint()
 
 
+def check_file_validity(fname):
+    """Checks if a the provided file is valid"""
+    if not fname:
+        print("No HDF5 file provided")
+        print("Usage: h5tui {file}.h5")
+        return False
+
+    if not h5py.is_hdf5(fname):
+        print(f"Provide argument '{fname}' is not a valid HDF5 file.")
+        print("Usage: h5tui {file}.h5")
+        return False
+
+    return True
+
+
 def h5tui():
     parser = argparse.ArgumentParser(description="H5TUI")
     parser.add_argument("file", type=str, action="store", help="HDF5 file")
     args = parser.parse_args()
     h5file = args.file
-    if h5py.is_hdf5(h5file):
+    if check_file_validity(h5file):
         H5TUIApp(h5file).run()
 
 
