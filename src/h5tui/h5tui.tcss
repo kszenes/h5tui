@@ -18,9 +18,20 @@ OptionList {
 .view-dataset #dirs {
   display: none;
 }
-
 .view-dataset #content {
   display: block;
+}
+
+.view-plot #data {
+  display: none;
+}
+.view-plot #plot {
+  display: block;
+}
+
+#plot {
+  dock: top;
+  display: none;
 }
 
 #header {

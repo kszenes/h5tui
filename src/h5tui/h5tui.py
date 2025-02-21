@@ -2,6 +2,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, OptionList, Static
 from textual.containers import VerticalScroll, Horizontal, Container
 from textual.binding import Binding
+from textual_plotext import PlotextPlot
 
 import h5py
 import numpy as np
@@ -11,6 +12,10 @@ import os
 import argparse
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
+
+
+def is_plotable(array):
+    return len(array.shape) == 1
 
 
 class MyOptionList(OptionList):
@@ -35,17 +40,27 @@ class ColumnContent(VerticalScroll):
     ]
 
     def compose(self):
-        self._content = Static(markup=False)
+        self._content = Static(id="data", markup=False)
+        self._plot = PlotextPlot(id="plot")
+        self._plot.plt.xlabel("Index")
         yield self._content
+        yield self._plot
 
-    def update(self, value):
+    def update_value(self, value):
         # save value to be able to reference it in toggle truncate
         self._value = value
-        self.reprint()
 
     def reprint(self):
         """Used to reprint if the numpy formatting is modified"""
         self._content.update(f"{self._value}")
+
+    def replot(self):
+        """Plot data, currently only supports one D data"""
+        if is_plotable(self._value):
+            self._plot.plt.clear_data()
+            self._plot.plt.plot(
+                np.arange(self._value.shape[0]), self._value, color="cyan"
+            )
 
 
 class Column(Container):
@@ -80,6 +95,7 @@ class H5TUIApp(App):
         Binding("right,l", "goto_child", "Select", show=True, priority=True),
         Binding("t", "truncate_print", "Truncate print", show=False),
         Binding("s", "suppress_print", "Suppress print", show=False),
+        Binding("p", "toggle_plot", "Toggle plot", show=False),
     ]
     CSS_PATH = "h5tui.tcss"
     TITLE = "h5tui"
@@ -137,9 +153,12 @@ class H5TUIApp(App):
         dset = self._file[path]
         dset_name = os.path.basename(path)
         dset_shape = dset.shape
-        dset_values = dset[...]
+        dset_data = dset[...]
 
-        self._column1._content_widget.update(dset_values)
+        self._data = dset_data
+
+        self._column1._content_widget.update_value(self._data)
+        self._column1._content_widget.reprint()
 
         self.update_header(f"Path: {self._cur_dir}\nDataset: {dset_name} {dset_shape}")
 
@@ -159,6 +178,7 @@ class H5TUIApp(App):
             self._header_widget.update(f"Path: {self._cur_dir}")
             self._column1.update_list(self.add_dir_metadata(), self._prev_highlighted)
         self.remove_class("view-dataset")
+        self.remove_class("view-plot")
         self.update_header(f"Path: {self._cur_dir}")
 
     def action_goto_child(self) -> None:
@@ -181,7 +201,7 @@ class H5TUIApp(App):
 
     def action_truncate_print(self):
         """Change numpy printing by toggling truncation"""
-        if self.has_class("view-dataset"):
+        if self.has_class("view-dataset") and not self.has_class("view-plot"):
             self.truncate_print = not self.truncate_print
             if self.truncate_print:
                 default_numpy_truncate = 1000
@@ -194,7 +214,7 @@ class H5TUIApp(App):
 
     def action_suppress_print(self):
         """Change numpy printing by suppression"""
-        if self.has_class("view-dataset"):
+        if self.has_class("view-dataset") and not self.has_class("view-plot"):
             self.suppress_print = not self.suppress_print
             if self.suppress_print:
                 np.set_printoptions(suppress=True)
@@ -203,6 +223,14 @@ class H5TUIApp(App):
                 np.set_printoptions(suppress=False)
                 self.notify("Suppression Disabled", timeout=1)
             self._column1._content_widget.reprint()
+
+    def action_toggle_plot(self):
+        if self.has_class("view-dataset"):
+            if is_plotable(self._data):
+                self.toggle_class("view-plot")
+                self._column1._content_widget.replot()
+            else:
+                self.notify("Currently only 1D data is plotable", severity="warning")
 
 
 def check_file_validity(fname):
