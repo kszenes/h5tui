@@ -170,21 +170,23 @@ class H5TUIApp(App):
                     self.update_content(path)
 
     def action_truncate_print(self):
-        self.truncate_print = not self.truncate_print
-        if self.truncate_print:
-            default_numpy_truncate = 1000
-            np.set_printoptions(threshold=default_numpy_truncate)
-        else:
-            np.set_printoptions(threshold=sys.maxsize)
-        self._column1._content_widget.reprint()
+        if self.has_class("view-dataset"):
+            self.truncate_print = not self.truncate_print
+            if self.truncate_print:
+                default_numpy_truncate = 1000
+                np.set_printoptions(threshold=default_numpy_truncate)
+            else:
+                np.set_printoptions(threshold=sys.maxsize)
+            self._column1._content_widget.reprint()
 
     def action_suppress_print(self):
-        self.suppress_print = not self.suppress_print
-        if self.suppress_print:
-            np.set_printoptions(suppress=True)
-        else:
-            np.set_printoptions(suppress=False)
-        self._column1._content_widget.reprint()
+        if self.has_class("view-dataset"):
+            self.suppress_print = not self.suppress_print
+            if self.suppress_print:
+                np.set_printoptions(suppress=True)
+            else:
+                np.set_printoptions(suppress=False)
+            self._column1._content_widget.reprint()
 
 
 def h5tui():
