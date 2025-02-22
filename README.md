@@ -6,7 +6,7 @@ This choice is quite natural since the HDF5 file format also adopts a directory 
 
 ## Demo
 
-https://github.com/user-attachments/assets/587742c7-654e-4236-b672-5b194535db18
+https://github.com/user-attachments/assets/11085d02-2857-4d9f-aac1-b403630b8ead
 
 ## Installation
 
@@ -30,6 +30,18 @@ h5tui file.h5
 The file can be navigated using the arrow or standard vim motion keys, with the `up`/`down` (`j`/`k`) moving the cursor inside the list, and `left`/`right` (`h`/`l`) for going to the parent or child HDF5 group.
 If the selected element is not an HDF5 group but an HDF5 dataset, then the contents of the dataset are displayed.
 If the data does not fit on one screen, it can be scrolled using the `up`/`down` `j`/`k` keybindings.
+
+## Plotting
+
+`h5tui` provides simple plotting facilities straight in the terminal using the [Plotext](https://github.com/piccolomo/plotext) library.
+1D arrays are displayed as scatter plots, and 2d arrays are shown as heatmaps. Higher dimensional tensors are not currently supported.
+The plotting can be toggled through the `p` keybinding while viewing a dataset.
+
+## Aggregation
+
+`h5tui` also has the functionality for performing limited data aggregation for summarizing the data.
+This can be activated through the `a` keybinding while viewing a dataset.
+Currently, this option will compute the min, max, and mean of the dataset but further statistics may be added in the future.
 
 ## Dataset Format Options
 
