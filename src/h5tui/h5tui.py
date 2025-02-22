@@ -111,6 +111,7 @@ class H5TUIApp(App):
         Binding("t", "truncate_print", "Truncate print", show=False),
         Binding("s", "suppress_print", "Suppress print", show=False),
         Binding("p", "toggle_plot", "Toggle plot", show=False),
+        Binding("a", "aggregate_data", "Aggregate data", show=False),
     ]
     CSS_PATH = "h5tui.tcss"
     TITLE = "h5tui"
@@ -126,9 +127,11 @@ class H5TUIApp(App):
 
         self._prev_highlighted = 0
 
-        self.truncate_print = True
-        self.suppress_print = False
+        self._truncate_print = True
+        self._suppress_print = False
         np.set_printoptions(linewidth=self.size.width)
+
+        self.is_aggregated = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -180,6 +183,22 @@ class H5TUIApp(App):
     def update_header(self, string):
         self._header_widget.update(string)
 
+    def aggregate_data(self):
+        dmax = float(np.max(self._data))
+        dmin = float(np.min(self._data))
+        dmean = float(np.mean(self._data))
+
+        return dmax, dmin, dmean
+
+    def action_aggregate_data(self):
+        if not self.is_aggregated:
+            content = self._header_widget._content
+            dmax, dmin, dmean = self.aggregate_data()
+            agg_string = f"    min = {dmin:.5f}; max = {dmax:.5f}; mean = {dmean:.5f}"
+            self.update_header(content + agg_string)
+            self.notify("Added dataset statistics", timeout=2)
+            self.is_aggregated = True
+
     def action_toggle_dark(self) -> None:
         self.theme = (
             "textual-dark" if self.theme == "textual-light" else "textual-light"
@@ -192,6 +211,7 @@ class H5TUIApp(App):
             self._cur_dir = os.path.dirname(self._cur_dir)
             self._header_widget.update(f"Path: {self._cur_dir}")
             self._column1.update_list(self.add_dir_metadata(), self._prev_highlighted)
+        self.is_aggregated = False
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
         self.update_header(f"Path: {self._cur_dir}")
@@ -217,8 +237,8 @@ class H5TUIApp(App):
     def action_truncate_print(self):
         """Change numpy printing by toggling truncation"""
         if self.has_class("view-dataset") and not self.has_class("view-plot"):
-            self.truncate_print = not self.truncate_print
-            if self.truncate_print:
+            self._truncate_print = not self._truncate_print
+            if self._truncate_print:
                 default_numpy_truncate = 1000
                 np.set_printoptions(threshold=default_numpy_truncate)
                 self.notify("Truncation Enabled", timeout=2)
@@ -230,8 +250,8 @@ class H5TUIApp(App):
     def action_suppress_print(self):
         """Change numpy printing by suppression"""
         if self.has_class("view-dataset") and not self.has_class("view-plot"):
-            self.suppress_print = not self.suppress_print
-            if self.suppress_print:
+            self._suppress_print = not self._suppress_print
+            if self._suppress_print:
                 np.set_printoptions(suppress=True)
                 self.notify("Suppression Enabled", timeout=2)
             else:
