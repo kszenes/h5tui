@@ -61,7 +61,10 @@ class ColumnContent(VerticalScroll):
             if self._value.ndim == 1:
                 self._plot.plt.xlabel("Index")
                 self._plot.plt.plot(
-                    np.arange(self._value.shape[0]), self._value, color="cyan"
+                    np.arange(self._value.shape[0]),
+                    self._value,
+                    color="cyan",
+                    marker="braille",
                 )
             elif self._value.ndim == 2:
                 nrows, ncols = self._value.shape
