@@ -64,8 +64,6 @@ class ColumnContent(VerticalScroll):
                     np.arange(self._value.shape[0]), self._value, color="cyan"
                 )
             elif self._value.ndim == 2:
-                self._plot.plt.xlabel("Column")
-                self._plot.plt.ylabel("Row")
                 nrows, ncols = self._value.shape
                 self._plot.plt.plot_size(nrows, ncols)
                 # arbitrary, should be expermineted with
@@ -76,6 +74,8 @@ class ColumnContent(VerticalScroll):
                     self._plot.plt.title("")
                 else:
                     self._plot.plt.matrix_plot(self._value.tolist())
+                self._plot.plt.xlabel("Column")
+                self._plot.plt.ylabel("Row")
 
 
 class Column(Container):
@@ -214,6 +214,8 @@ class H5TUIApp(App):
         self.is_aggregated = False
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
+        # These are the default numpy print setting
+        np.set_printoptions(suppress=False, threshold=1000)
         self.update_header(f"Path: {self._cur_dir}")
 
     def action_goto_child(self) -> None:
