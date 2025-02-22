@@ -6,6 +6,7 @@ from textual_plotext import PlotextPlot
 
 import h5py
 import numpy as np
+import pandas as pd
 
 import sys
 import os
@@ -15,7 +16,7 @@ UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
 
 
 def is_plotable(array):
-    return len(array.shape) == 1
+    return array.ndim == 1 or array.ndim == 2
 
 
 class MyOptionList(OptionList):
@@ -42,7 +43,6 @@ class ColumnContent(VerticalScroll):
     def compose(self):
         self._content = Static(id="data", markup=False)
         self._plot = PlotextPlot(id="plot")
-        self._plot.plt.xlabel("Index")
         yield self._content
         yield self._plot
 
@@ -55,12 +55,27 @@ class ColumnContent(VerticalScroll):
         self._content.update(f"{self._value}")
 
     def replot(self):
-        """Plot data, currently only supports one D data"""
+        """Plot data, currently only supports 1D and 2D data"""
         if is_plotable(self._value):
-            self._plot.plt.clear_data()
-            self._plot.plt.plot(
-                np.arange(self._value.shape[0]), self._value, color="cyan"
-            )
+            self._plot.plt.clear_figure()
+            if self._value.ndim == 1:
+                self._plot.plt.xlabel("Index")
+                self._plot.plt.plot(
+                    np.arange(self._value.shape[0]), self._value, color="cyan"
+                )
+            elif self._value.ndim == 2:
+                self._plot.plt.xlabel("Column")
+                self._plot.plt.ylabel("Row")
+                nrows, ncols = self._value.shape
+                self._plot.plt.plot_size(nrows, ncols)
+                # arbitrary, should be expermineted with
+                size_threshold = 100
+                if nrows < size_threshold and ncols < size_threshold:
+                    self._plot.plt.heatmap(pd.DataFrame(self._value))
+                    # heatmap has default title, remove it
+                    self._plot.plt.title("")
+                else:
+                    self._plot.plt.matrix_plot(self._value.tolist())
 
 
 class Column(Container):
