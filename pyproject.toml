@@ -7,7 +7,10 @@ name = "h5tui"
 dynamic = ["version"]
 dependencies = [
   "textual",
+  "textual_plotext",
   "h5py",
+  "numpy",
+  "pandas"
 ]
 authors = [
   {name = "Kalman Szenes", email =  "szenes.kalman@gmail.com"}
