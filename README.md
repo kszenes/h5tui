@@ -1,3 +1,6 @@
+
+<img width="300px" alt="Screenshot 2025-02-23 at 19 39 34" src="https://github.com/user-attachments/assets/276d1dc5-e660-4372-9595-7e114c70fada" />
+
 ## Description
 
 `h5tui` is a terminal user interface (TUI) application for viewing the contents of [HDF5](https://www.hdfgroup.org/solutions/hdf5/) files, a binary file format prevalent in scientific computing and data science, straight in the terminal.
