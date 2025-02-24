@@ -19,6 +19,10 @@ def is_plotable(array):
     return array.ndim == 1 or array.ndim == 2
 
 
+def add_escape_chars(string: str):
+    return string.replace("[", r"\[")
+
+
 class MyOptionList(OptionList):
     BINDINGS = [
         Binding("down,j", "cursor_down", "Down", show=True),
@@ -87,7 +91,8 @@ class Column(Container):
     def __init__(self, dirs, focus=False):
         super().__init__()
         self._focus = focus
-        self._selector_widget = MyOptionList(*dirs, id="dirs")
+        escaped_dirs = [add_escape_chars(dir) for dir in dirs]
+        self._selector_widget = MyOptionList(*escaped_dirs, id="dirs")
         self._content_widget = ColumnContent(id="content")
 
     def compose(self):
@@ -99,7 +104,8 @@ class Column(Container):
     def update_list(self, dirs, prev_highlighted):
         """Redraw option list with contents of current directory"""
         self._selector_widget.clear_options()
-        self._selector_widget.add_options(dirs)
+        escaped_dirs = [add_escape_chars(dir) for dir in dirs]
+        self._selector_widget.add_options(escaped_dirs)
         self._selector_widget.highlighted = prev_highlighted
 
 
