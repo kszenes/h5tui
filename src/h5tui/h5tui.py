@@ -22,6 +22,8 @@ def is_plotable(array):
 def add_escape_chars(string: str):
     return string.replace("[", r"\[")
 
+def remove_escaped_chars(string: str):
+    return string.replace(r"\[", "[")
 
 class MyOptionList(OptionList):
     BINDINGS = [
@@ -235,6 +237,7 @@ class H5TUIApp(App):
                 highlighted
             ).prompt.split()[-1]
             path = os.path.join(self._cur_dir, selected_item)
+            path = remove_escaped_chars(path)
 
             if path in self._file:
                 if isinstance(self._file[path], h5py.Group):
