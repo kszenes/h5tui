@@ -22,8 +22,10 @@ def is_plotable(array):
 def add_escape_chars(string: str):
     return string.replace("[", r"\[")
 
+
 def remove_escaped_chars(string: str):
     return string.replace(r"\[", "[")
+
 
 class MyOptionList(OptionList):
     BINDINGS = [
@@ -148,7 +150,7 @@ class H5TUIApp(App):
         yield Header()
         yield Footer()
 
-        self._header_widget = Static("/", id="header", markup=False)
+        self._header_widget = Static("Path: /", id="header", markup=False)
         yield self._header_widget
         with Horizontal():
             dir_with_metadata = self.add_dir_metadata()
