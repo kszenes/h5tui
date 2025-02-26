@@ -281,10 +281,10 @@ class H5TUIApp(App):
             if self._truncate_print:
                 default_numpy_truncate = 1000
                 np.set_printoptions(threshold=default_numpy_truncate)
-                self.notify("Truncation Enabled", timeout=2)
+                self.notify("Truncation: ON", timeout=2)
             else:
                 np.set_printoptions(threshold=sys.maxsize)
-                self.notify("Truncation Disabled", timeout=2)
+                self.notify("Truncation: OFF", timeout=2)
             self._column1._content_widget.reprint()
 
     def action_suppress_print(self):
@@ -293,10 +293,10 @@ class H5TUIApp(App):
             self._suppress_print = not self._suppress_print
             if self._suppress_print:
                 np.set_printoptions(suppress=True)
-                self.notify("Suppression Enabled", timeout=2)
+                self.notify("Suppression: ON", timeout=2)
             else:
                 np.set_printoptions(suppress=False)
-                self.notify("Suppression Disabled", timeout=1)
+                self.notify("Suppression: OFF", timeout=1)
             self._column1._content_widget.reprint()
 
     def action_toggle_plot(self):
@@ -304,8 +304,6 @@ class H5TUIApp(App):
             if is_plotable(self._data):
                 if not self.has_class("view-plot"):
                     self.notify("Plotting...", timeout=2)
-                else:
-                    self.notify("Viewing Dataset", timeout=1)
                 self.toggle_class("view-plot")
                 self._column1._content_widget.replot()
             else:
