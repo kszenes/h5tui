@@ -15,16 +15,17 @@ import argparse
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
 
 
-def is_plotable(array):
-    squeezed = np.squeeze(array)
-    return squeezed.ndim == 1 or squeezed.ndim == 2
+def is_plotable(obj):
+    is_not_composity_type = len(obj.dtype) == 0
+    squeezed = np.squeeze(obj)
+    return is_not_composity_type and (squeezed.ndim == 1 or squeezed.ndim == 2)
 
 
-def is_aggregatable(array):
+def is_aggregatable(obj):
     return (
-        isinstance(array, np.ndarray)
-        and np.issubdtype(array.dtype, np.number)
-        and array.size > 1
+        isinstance(obj, np.ndarray)
+        and np.issubdtype(obj.dtype, np.number)
+        and obj.size > 1
     )
 
 
