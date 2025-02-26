@@ -16,11 +16,16 @@ UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
 
 
 def is_plotable(array):
-    return array.ndim == 1 or array.ndim == 2
+    squeezed = np.squeeze(array)
+    return squeezed.ndim == 1 or squeezed.ndim == 2
 
 
 def is_aggregatable(array):
-    return isinstance(array, np.ndarray) and np.issubdtype(array.dtype, np.number)
+    return (
+        isinstance(array, np.ndarray)
+        and np.issubdtype(array.dtype, np.number)
+        and array.size > 1
+    )
 
 
 def add_escape_chars(string: str):
@@ -68,27 +73,28 @@ class ColumnContent(VerticalScroll):
 
     def replot(self):
         """Plot data, currently only supports 1D and 2D data"""
-        if is_plotable(self._value):
+        data = np.squeeze(self._value)
+        if is_plotable(data):
             self._plot.plt.clear_figure()
-            if self._value.ndim == 1:
+            if data.ndim == 1:
                 self._plot.plt.xlabel("Index")
                 self._plot.plt.plot(
-                    np.arange(self._value.shape[0]),
-                    self._value,
+                    np.arange(data.shape[0]),
+                    data,
                     color="cyan",
                     marker="braille",
                 )
-            elif self._value.ndim == 2:
-                nrows, ncols = self._value.shape
+            elif data.ndim == 2:
+                nrows, ncols = data.shape
                 self._plot.plt.plot_size(nrows, ncols)
                 # arbitrary, should be expermineted with
                 size_threshold = 100
                 if nrows < size_threshold and ncols < size_threshold:
-                    self._plot.plt.heatmap(pd.DataFrame(self._value))
+                    self._plot.plt.heatmap(pd.DataFrame(data))
                     # heatmap has default title, remove it
                     self._plot.plt.title("")
                 else:
-                    self._plot.plt.matrix_plot(self._value.tolist())
+                    self._plot.plt.matrix_plot(data.tolist())
                 self._plot.plt.xlabel("Column")
                 self._plot.plt.ylabel("Row")
 
@@ -188,6 +194,7 @@ class H5TUIApp(App):
         dset = self._file[path]
         dset_name = os.path.basename(path)
         dset_shape = dset.shape
+        dset_dtype = dset.dtype
         dset_data = dset[...]
 
         self._data = dset_data
@@ -195,7 +202,9 @@ class H5TUIApp(App):
         self._column1._content_widget.update_value(self._data)
         self._column1._content_widget.reprint()
 
-        self.update_header(f"Path: {self._cur_dir}\nDataset: {dset_name} {dset_shape}")
+        self.update_header(
+            f"Path: {self._cur_dir}\nDataset: {dset_name} <{dset_dtype}> {dset_shape}"
+        )
 
     def update_header(self, string):
         self._header_widget.update(string)
