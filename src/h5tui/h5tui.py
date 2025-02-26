@@ -125,10 +125,10 @@ class H5TUIApp(App):
         Binding("q", "quit", "Quit", show=False),
         Binding("left,h", "goto_parent", "Parent", show=True, priority=True),
         Binding("right,l", "goto_child", "Select", show=True, priority=True),
-        Binding("t", "truncate_print", "Truncate", show=False),
+        Binding("t", "truncate_print", "Truncate", show=True),
         Binding("s", "suppress_print", "Suppress", show=False),
-        Binding("p", "toggle_plot", "Plot", show=False),
-        Binding("a", "aggregate_data", "Aggregate", show=False),
+        Binding("p", "toggle_plot", "Plot", show=True),
+        Binding("a", "aggregate_data", "Aggregate", show=True),
     ]
     CSS_PATH = "h5tui.tcss"
     TITLE = "h5tui"
