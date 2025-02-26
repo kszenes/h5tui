@@ -229,7 +229,7 @@ class H5TUIApp(App):
             stats = self.aggregate_data()
             agg_string = (
                 "\nSummary: "
-                + "; ".join([f"{key} = {value:.5f}" for key, value in stats.items()])
+                + "; ".join([f"{key} = {value:.5g}" for key, value in stats.items()])
                 + "; "
             )
             self.update_header(content + agg_string)
