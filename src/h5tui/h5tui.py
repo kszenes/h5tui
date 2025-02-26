@@ -278,10 +278,16 @@ class H5TUIApp(App):
     def action_toggle_plot(self):
         if self.has_class("view-dataset"):
             if is_plotable(self._data):
+                if not self.has_class("view-plot"):
+                    self.notify("Plotting Dataset", timeout=2)
+                else:
+                    self.notify("Viewing Dataset", timeout=1)
                 self.toggle_class("view-plot")
                 self._column1._content_widget.replot()
             else:
-                self.notify("Currently only 1D data is plotable", severity="warning")
+                self.notify(
+                    "Currently only 1D and 2D data is plotable", severity="warning"
+                )
 
 
 def check_file_validity(fname):

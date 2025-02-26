@@ -40,3 +40,8 @@ OptionList {
   padding: 0 1;
   margin: 1 0;
 }
+
+Toast {
+  padding: 1;
+  margin: 0;
+}
