@@ -19,6 +19,10 @@ def is_plotable(array):
     return array.ndim == 1 or array.ndim == 2
 
 
+def is_aggregatable(array):
+    return isinstance(array, np.ndarray) and np.issubdtype(array.dtype, np.number)
+
+
 def add_escape_chars(string: str):
     return string.replace("[", r"\[")
 
@@ -197,19 +201,30 @@ class H5TUIApp(App):
         self._header_widget.update(string)
 
     def aggregate_data(self):
-        dmax = float(np.max(self._data))
-        dmin = float(np.min(self._data))
-        dmean = float(np.mean(self._data))
+        stats = {
+            "mean": float(np.mean(self._data)),
+            "std": float(np.std(self._data)),
+            "max": float(np.max(self._data)),
+            "min": float(np.min(self._data)),
+        }
 
-        return dmax, dmin, dmean
+        return stats
 
     def action_aggregate_data(self):
+        if not is_aggregatable(self._data):
+            self.notify("Only numeric arrays may be aggregated", severity="warning")
+            return
+
         if not self.is_aggregated:
             content = self._header_widget._content
-            dmax, dmin, dmean = self.aggregate_data()
-            agg_string = f"    min = {dmin:.5f}; max = {dmax:.5f}; mean = {dmean:.5f}"
+            stats = self.aggregate_data()
+            agg_string = (
+                "\nSummary: "
+                + "; ".join([f"{key} = {value:.5f}" for key, value in stats.items()])
+                + "; "
+            )
             self.update_header(content + agg_string)
-            self.notify("Added dataset statistics", timeout=2)
+            self.notify("Summarizing...", timeout=2)
             self.is_aggregated = True
 
     def action_toggle_dark(self) -> None:
@@ -279,7 +294,7 @@ class H5TUIApp(App):
         if self.has_class("view-dataset"):
             if is_plotable(self._data):
                 if not self.has_class("view-plot"):
-                    self.notify("Plotting Dataset", timeout=2)
+                    self.notify("Plotting...", timeout=2)
                 else:
                     self.notify("Viewing Dataset", timeout=1)
                 self.toggle_class("view-plot")
