@@ -117,14 +117,14 @@ class H5TUIApp(App):
     """Simple tui application for displaying and navigating h5 files"""
 
     BINDINGS = [
-        Binding("i", "toggle_dark", "Toggle dark mode"),
-        Binding("q", "quit", "Quit"),
-        Binding("left,h", "goto_parent", "Parent Directory", show=True, priority=True),
+        Binding("i", "toggle_dark", "Toggle dark mode", show=False),
+        Binding("q", "quit", "Quit", show=False),
+        Binding("left,h", "goto_parent", "Parent", show=True, priority=True),
         Binding("right,l", "goto_child", "Select", show=True, priority=True),
-        Binding("t", "truncate_print", "Truncate print", show=False),
-        Binding("s", "suppress_print", "Suppress print", show=False),
-        Binding("p", "toggle_plot", "Toggle plot", show=False),
-        Binding("a", "aggregate_data", "Aggregate data", show=False),
+        Binding("t", "truncate_print", "Truncate", show=False),
+        Binding("s", "suppress_print", "Suppress", show=False),
+        Binding("p", "toggle_plot", "Plot", show=False),
+        Binding("a", "aggregate_data", "Aggregate", show=False),
     ]
     CSS_PATH = "h5tui.tcss"
     TITLE = "h5tui"
