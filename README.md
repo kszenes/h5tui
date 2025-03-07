@@ -1,5 +1,5 @@
 
-<img width="300px" alt="Screenshot 2025-02-23 at 19 39 34" src="https://github.com/user-attachments/assets/276d1dc5-e660-4372-9595-7e114c70fada" />
+<img width="300px" alt="h5tui-logo" src="https://github.com/user-attachments/assets/f3230869-38c5-414f-8fd1-44dd48c25322" />
 
 ## Description
 
