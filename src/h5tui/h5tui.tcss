@@ -21,6 +21,9 @@ OptionList {
 .view-dataset #content {
   display: block;
 }
+.view-dataset #dtable {
+  display: none;
+}
 
 .view-plot #data {
   display: none;
@@ -28,10 +31,27 @@ OptionList {
 .view-plot #plot {
   display: block;
 }
+.view-plot #dtable {
+  display: none;
+}
+
+.view-dtable #data {
+  display: none;
+}
+.view-dtable #plot {
+  display: none;
+}
+.view-dtable #dtable {
+  display: block;
+}
 
 #plot {
   dock: top;
   display: none;
+}
+#dtable {
+  dock: top;
+  display: block;
 }
 
 #header {

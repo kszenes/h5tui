@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Footer, Header, OptionList, Static
+from textual.widgets import Footer, Header, OptionList, Static, DataTable
 from textual.containers import VerticalScroll, Horizontal, Container
 from textual.binding import Binding
 from textual_plotext import PlotextPlot
@@ -13,6 +13,42 @@ import os
 import argparse
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
+
+
+class MyDataTable(DataTable):
+    BINDINGS = [
+        Binding("enter", "select_cursor", "Select", show=False),
+        Binding("up,k", "cursor_up", "Cursor up", show=False),
+        Binding("down,j", "cursor_down", "Cursor down", show=False),
+        Binding("right,L", "cursor_right", "Cursor right", show=False),
+        Binding("left,H", "cursor_left", "Cursor left", show=False),
+        Binding("pageup,u", "page_up", "Page up", show=False),
+        Binding("pagedown,d", "page_down", "Page down", show=False),
+        Binding("g", "scroll_top", "Top", show=False),
+        Binding("G", "scroll_bottom", "Bottom", show=False),
+    ]
+
+    def __init__(self, id):
+        super().__init__(id=id)
+
+    def update(self, value):
+        self.clear(columns=True)
+        self.add_columns(*get_colnames(value))
+        for row in value:
+            row_cleaned = [
+                e.decode("utf8") if isinstance(e, bytes) else e for e in row.item()
+            ]
+            self.add_row(*row_cleaned)
+
+
+def get_colnames(obj):
+    """Return the column names of numpy recarray"""
+    return obj.dtype.names
+
+
+def is_dataframe(obj):
+    """Checks if numpy array is a dataframe i.e., recarray"""
+    return len(obj.dtype) != 0
 
 
 def is_plotable(obj):
@@ -52,8 +88,8 @@ class ColumnContent(VerticalScroll):
     BINDINGS = [
         Binding("down,j", "scroll_down", "Down", show=True),
         Binding("up,k", "scroll_up", "Up", show=True),
-        Binding("u", "page_up", "Bottom", show=False),
-        Binding("d", "page_down", "Bottom", show=False),
+        Binding("pageup,u", "page_up", "Page up", show=False),
+        Binding("pagedown,d", "page_down", "Page down", show=False),
         Binding("G", "scroll_end", "Bottom", show=False),
         Binding("g", "scroll_home", "Top", show=False),
     ]
@@ -61,8 +97,10 @@ class ColumnContent(VerticalScroll):
     def compose(self):
         self._content = Static(id="data", markup=False)
         self._plot = PlotextPlot(id="plot")
+        self._df = MyDataTable(id="dtable")
         yield self._content
         yield self._plot
+        yield self._df
 
     def update_value(self, value):
         # save value to be able to reference it in toggle truncate
@@ -70,7 +108,12 @@ class ColumnContent(VerticalScroll):
 
     def reprint(self):
         """Used to reprint if the numpy formatting is modified"""
-        self._content.update(f"{self._value}")
+        if is_dataframe(self._value):
+            self._df.update(self._value)
+            self._df.focus()
+
+        else:
+            self._content.update(f"{self._value}")
 
     def replot(self):
         """Plot data, currently only supports 1D and 2D data"""
@@ -190,15 +233,19 @@ class H5TUIApp(App):
         return list(self._file[dir].keys())
 
     def update_content(self, path):
-        self.add_class("view-dataset")
-
         dset = self._file[path]
         dset_name = os.path.basename(path)
         dset_shape = dset.shape
-        dset_dtype = dset.dtype
         dset_data = dset[...]
 
         self._data = dset_data
+
+        self.add_class("view-dataset")
+        if is_dataframe(self._data):
+            self.add_class("view-dtable")
+            dset_dtype = [str(field[0]) for field in dset.dtype.fields.values()]
+        else:
+            dset_dtype = dset.dtype
 
         self._column1._content_widget.update_value(self._data)
         self._column1._content_widget.reprint()
@@ -253,12 +300,21 @@ class H5TUIApp(App):
         self.is_aggregated = False
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
+        self.remove_class("view-dtable")
+        self._column1._selector_widget.focus()
         # These are the default numpy print setting
         np.set_printoptions(suppress=False, threshold=1000)
         self.update_header(f"Path: {self._cur_dir}")
 
     def action_goto_child(self) -> None:
         """Either displays child or dataset"""
+        if (
+            self.has_class("view-dataset")
+            or self.has_class("view-plot")
+            or self.has_class("view-dtable")
+        ):
+            # Does not do anything if data is already being viewed
+            return
         highlighted = self._column1._selector_widget.highlighted
         if highlighted is not None:
             selected_item = self._column1._selector_widget.get_option_at_index(
