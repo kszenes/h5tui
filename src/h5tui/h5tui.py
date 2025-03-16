@@ -216,6 +216,7 @@ class H5TUIApp(App):
             "std": float(np.std(self._data)),
             "max": float(np.max(self._data)),
             "min": float(np.min(self._data)),
+            "norm": float(np.linalg.norm(self._data)),
         }
 
         return stats
