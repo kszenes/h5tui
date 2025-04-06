@@ -36,6 +36,13 @@ The directory structure can be navigated using the arrow or standard vim motion 
 If the selected element is not an HDF5 group but an HDF5 dataset, then the dataset is displayed.
 If the entire dataset does not fit on the screen, it can be scrolled using the `up`/`down` `j`/`k` keybindings.
 
+## Attributes
+
+Items with associated attributes are marked with the symbol ▼ followed by the number of attributes. They can be viewed using the `a` character, which will open a popup with the attributes for that item. The navigation in this menu is analogous to the general menu. The menu can be exited using the `q` or `left,h` keys.
+
+https://github.com/user-attachments/assets/757768e2-77fa-4708-ba17-a334e299fdfd
+
+
 ## Plotting
 
 `h5tui` provides convenient terminal plotting facilities using the [plotext](https://github.com/piccolomo/plotext) library.
@@ -45,7 +52,7 @@ The plotting can be toggled through the `p` keybinding while viewing a dataset.
 ## Aggregation
 
 `h5tui` also has limited data aggregation facilities for summarizing datasets.
-This can be activated through the `a` keybinding while viewing a dataset.
+This can be activated through the `A` keybinding while viewing a dataset.
 Currently, this option will compute the min, max, and mean of the dataset but further statistics may be added in the future.
 
 ## Dataset Format Options
@@ -60,8 +67,13 @@ Formatting keybindings:
 - `t`: toggle output truncation
 - `s`: toggle scientific notation
 
+## Special Treatment of Dataframes
+
+Dataframes, which `h5py` stores in the form of an `np.recarray` are pretty-printed using the `textual` `DataTable` widget. The table can be navigated vertically using the `k`/`j` keys and horizontally using the capital keys `H`,`L`, to avoid clashing with the `h` key which would take you back to the directory structure.
+
+![image](https://github.com/user-attachments/assets/eaf07aad-ffba-483e-8740-d9ac85fa6eab)
+
 ## Limitations
 
-- There is no support for displaying HDF5 attributes (mostly because the HDF5 files that I work with don't rely on them). However, if there is demand, this functionality can be added.
 - There is no editing functionality, the contents of the HDF5 file cannot be modified through `h5tui`.
 - I have only tested  dataset viewing and plotting for primitive types (strings, ints, floats) and arrays. Please let me know if you encounter any issues.
