@@ -333,7 +333,7 @@ class H5TUIApp(App):
                 highlighted
             ).prompt
             selected_item = self.get_itemname_from_prompt(prompt)
-            return self.build_attr_str(selected_item) != ""
+            return self.build_attr_str(remove_escaped_chars(selected_item)) != ""
 
     def build_attr_str(self, elem):
         """Creates the has attributes string (▼ + num attrs)"""
@@ -413,8 +413,6 @@ class H5TUIApp(App):
             return False
         elif action == "goto_child" and self.has_class("view-dataset"):
             return False
-        elif action == "view_attrs" and not self.has_attr():
-            return None
         elif action in ["cursor_down", "cursor_up"] and self.has_class("view-dataset"):
             return False
         else:
@@ -427,7 +425,7 @@ class H5TUIApp(App):
             prompt = self._column1._selector_widget.get_option_at_index(
                 highlighted
             ).prompt
-            selected_item = self.get_itemname_from_prompt(prompt)
+            selected_item = remove_escaped_chars(self.get_itemname_from_prompt(prompt))
             if self.build_attr_str(selected_item) != "":
                 self.push_screen(
                     AttributeScreen(self._file, self._cur_dir, selected_item)
