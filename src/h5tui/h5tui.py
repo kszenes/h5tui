@@ -348,7 +348,7 @@ class H5TUIApp(App):
         items = list(self._file[self._cur_dir].keys())
         with_type_icon = [self.group_or_dataset(item) + item for item in items]
         with_attrs = [
-            with_type + f"\t{self.build_attr_str(item)}"
+            with_type + f"    {self.build_attr_str(item)}"
             for with_type, item in zip(with_type_icon, items)
         ]
         return with_attrs
