@@ -35,6 +35,7 @@ h5tui file.h5
 The directory structure can be navigated using the arrow or standard vim motion keys, with the `up`/`down` (`j`/`k`) moving the cursor inside the current group, and `left`/`right` (`h`/`l`) for going to the parent or child HDF5 group.
 If the selected element is not an HDF5 group but an HDF5 dataset, then the dataset is displayed.
 If the entire dataset does not fit on the screen, it can be scrolled using the `up`/`down` `j`/`k` keybindings.
+Inside the file tree, Groups are denoted by 📁 while Datasets are denoted by 📊.
 
 ## Attributes
 
