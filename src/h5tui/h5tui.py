@@ -21,8 +21,8 @@ class AttributeScreen(ModalScreen):
         Binding(
             "left,h,q",
             "quit_attrs",
-            "Quit attribtues screen",
-            show=False,
+            "Return",
+            show=True,
             priority=True,
         ),
         Binding("down,j", "cursor_down", "Down", show=True, priority=True),
@@ -57,12 +57,12 @@ class AttributeScreen(ModalScreen):
         with Vertical(id="dialog"):
             yield self._selector_widget
             yield self._vertical_widget
+        yield Footer()
 
     def update_content(self):
         content = str(self._item.attrs[self._cur_attr])
         print(f"{content = }")
         self._content_widget.update(content)
-        # self._content_widget.border_title = self._cur_attr
 
     def action_quit_attrs(self):
         self.app.pop_screen()
@@ -164,6 +164,22 @@ class MyOptionList(OptionList):
         Binding("g", "page_up", "Top", show=False),
     ]
 
+    def action_cursor_down(self) -> None:
+        self.refresh_bindings()
+        return super().action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        self.refresh_bindings()
+        return super().action_cursor_up()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action in ["cursor_down", "cursor_up"] and self.app.has_class(
+            "view-dataset"
+        ):
+            return False
+        else:
+            return True
+
 
 class ColumnContent(VerticalScroll):
     """Column which displays a dataset"""
@@ -261,7 +277,7 @@ class H5TUIApp(App):
         Binding("right,l", "goto_child", "Select", show=True, priority=True),
         Binding("a", "view_attrs", "Attributes", show=True),
         Binding("t", "truncate_print", "Truncate", show=True),
-        Binding("s", "suppress_print", "Suppress", show=False),
+        Binding("s", "suppress_print", "Suppress", show=True),
         Binding("p", "toggle_plot", "Plot", show=True),
         Binding("A", "aggregate_data", "Aggregate", show=True),
     ]
@@ -308,6 +324,16 @@ class H5TUIApp(App):
                 return "(Group)    "
             if isinstance(h5elem, h5py.Dataset):
                 return "(DataSet)  "
+
+    def has_attr(self):
+        """Return if the currently selected item has attributes"""
+        highlighted = self._column1._selector_widget.highlighted
+        if highlighted is not None:
+            prompt = self._column1._selector_widget.get_option_at_index(
+                highlighted
+            ).prompt
+            selected_item = self.get_itemname_from_prompt(prompt)
+            return self.build_attr_str(selected_item) != ""
 
     def build_attr_str(self, elem):
         """Creates the has attributes string (▼ + num attrs)"""
@@ -374,6 +400,26 @@ class H5TUIApp(App):
 
         return stats
 
+    def check_action(self, action, parameters) -> bool | None:
+        if (
+            action
+            in [
+                "truncate_print",
+                "suppress_print",
+                "toggle_plot",
+                "aggregate_data",
+            ]
+        ) and not self.has_class("view-dataset"):
+            return False
+        elif action == "goto_child" and self.has_class("view-dataset"):
+            return False
+        elif action == "view_attrs" and not self.has_attr():
+            return None
+        elif action in ["cursor_down", "cursor_up"] and self.has_class("view-dataset"):
+            return False
+        else:
+            return True
+
     def action_view_attrs(self) -> None:
         """Action to display the quit dialog."""
         highlighted = self._column1._selector_widget.highlighted
@@ -386,11 +432,21 @@ class H5TUIApp(App):
                 self.push_screen(
                     AttributeScreen(self._file, self._cur_dir, selected_item)
                 )
+            else:
+                self.notify(
+                    "Selected item does not have attributes",
+                    severity="warning",
+                    timeout=2,
+                )
 
     def action_aggregate_data(self):
         if self.has_class("view-dataset"):
             if not is_aggregatable(self._data):
-                self.notify("Only numeric arrays may be aggregated", severity="warning")
+                self.notify(
+                    "Only numeric arrays may be aggregated",
+                    severity="warning",
+                    timeout=2,
+                )
                 return
 
             if not self.is_aggregated:
@@ -427,6 +483,7 @@ class H5TUIApp(App):
         # These are the default numpy print setting
         np.set_printoptions(suppress=False, threshold=1000)
         self.update_header(f"Path: {self._cur_dir}")
+        self.refresh_bindings()
 
     def action_goto_child(self) -> None:
         """Either displays child or dataset"""
@@ -454,6 +511,7 @@ class H5TUIApp(App):
                     self._column1.update_list(self.add_dir_metadata(), 0)
                 else:
                     self.update_content(path)
+        self.refresh_bindings()
 
     def action_truncate_print(self):
         """Change numpy printing by toggling truncation"""
