@@ -172,7 +172,7 @@ class MyOptionList(OptionList):
         self.refresh_bindings()
         return super().action_cursor_up()
 
-    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+    def check_action(self, action, parameters):
         if action in ["cursor_down", "cursor_up"] and self.app.has_class(
             "view-dataset"
         ):
@@ -400,7 +400,7 @@ class H5TUIApp(App):
 
         return stats
 
-    def check_action(self, action, parameters) -> bool | None:
+    def check_action(self, action, parameters):
         if (
             action
             in [
