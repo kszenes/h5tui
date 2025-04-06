@@ -9,6 +9,7 @@
   background: $boost;
   max-height: 90%;
   padding: 0 1;
+  background: $panel;
 }
 
 OptionList {
@@ -64,4 +65,38 @@ OptionList {
 Toast {
   padding: 1;
   margin: 0;
+}
+
+AttributeScreen {
+  align: center middle;
+}
+#dialog {
+    grid-size: 2;
+    grid-gutter: 1 2;
+    grid-rows: 1fr 3;
+    padding: 0 1;
+    width: 80%;
+    height: 80%;
+    border: thick $background 80%;
+    background: $surface;
+}
+#attr_title {
+    column-span: 2;
+    height: 10%;
+    width: 1fr;
+    content-align: center middle;
+}
+.attr_col {
+    column-span: 1;
+    height: 1fr;
+    width: 1fr;
+}
+#attr_content_scroll {
+  margin: 1 0;
+}
+#attr_content {
+  border: tall $secondary;
+  background: $panel;
+  margin: 0 0;
+  padding: 0 1;
 }

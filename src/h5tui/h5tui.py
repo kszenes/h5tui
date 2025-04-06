@@ -1,7 +1,8 @@
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, OptionList, Static, DataTable
-from textual.containers import VerticalScroll, Horizontal, Container
+from textual.containers import VerticalScroll, Horizontal, Container, Vertical
 from textual.binding import Binding
+from textual.screen import ModalScreen
 from textual_plotext import PlotextPlot
 
 import h5py
@@ -13,6 +14,88 @@ import os
 import argparse
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
+
+
+class AttributeScreen(ModalScreen):
+    BINDINGS = [
+        Binding(
+            "left,h,q",
+            "quit_attrs",
+            "Quit attribtues screen",
+            show=False,
+            priority=True,
+        ),
+        Binding("down,j", "cursor_down", "Down", show=True, priority=True),
+        Binding("up,k", "cursor_up", "Up", show=True, priority=True),
+        Binding("J", "scroll_content_down", "Scroll Down", priority=True),
+        Binding("K", "scroll_content_up", "Scroll Up", priority=True),
+        Binding("u", "scroll_content_page_up", "Scroll Down", priority=True),
+        Binding("d", "scroll_content_page_down", "Scroll Up", priority=True),
+    ]
+
+    def __init__(self, h5file, cur_dir, itemname, id=None) -> None:
+        super().__init__(id=id)
+        self._file = h5file
+        self._cur_dir = cur_dir
+        self._itemname = itemname
+        self._item = self._file[self._cur_dir + f"/{self._itemname}"]
+        self._attrs = list(self._item.attrs.keys())
+
+        self._cur_attr = self._attrs[0]
+
+        self._selector_widget = MyOptionList(*self._attrs)
+        self._selector_widget.border_title = f"Attributes for {self._itemname}"
+
+        self._content_widget = Static(id="attr_content")
+        self._vertical_widget = VerticalScroll(
+            self._content_widget, id="attr_content_scroll"
+        )
+
+        self.update_content()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield self._selector_widget
+            yield self._vertical_widget
+
+    def update_content(self):
+        content = str(self._item.attrs[self._cur_attr])
+        print(f"{content = }")
+        self._content_widget.update(content)
+        # self._content_widget.border_title = self._cur_attr
+
+    def action_quit_attrs(self):
+        self.app.pop_screen()
+
+    def action_cursor_down(self):
+        self._selector_widget.action_cursor_down()
+        highlighted = self._selector_widget.highlighted
+        if highlighted is not None:
+            self._cur_attr = self._attrs[highlighted]
+            self.update_content()
+
+    def action_cursor_up(self):
+        self._selector_widget.action_cursor_up()
+        highlighted = self._selector_widget.highlighted
+        if highlighted is not None:
+            self._cur_attr = self._attrs[highlighted]
+            self.update_content()
+
+    def action_scroll_content_down(self):
+        print("scrolling down")
+        self._vertical_widget.scroll_down()
+
+    def action_scroll_content_up(self):
+        print("scrolling up")
+        self._vertical_widget.scroll_up()
+
+    def action_scroll_content_page_down(self):
+        print("scrolling DOWN")
+        self._vertical_widget.scroll_page_down()
+
+    def action_scroll_content_page_up(self):
+        print("scrolling UP")
+        self._vertical_widget.scroll_page_up()
 
 
 class MyDataTable(DataTable):
@@ -174,12 +257,13 @@ class H5TUIApp(App):
     BINDINGS = [
         Binding("i", "toggle_dark", "Toggle dark mode", show=False),
         Binding("q", "quit", "Quit", show=False),
-        Binding("left,h", "goto_parent", "Parent", show=True, priority=True),
+        Binding("left,h", "goto_parent", "Back", show=True),
         Binding("right,l", "goto_child", "Select", show=True, priority=True),
+        Binding("a", "view_attrs", "Attributes", show=True),
         Binding("t", "truncate_print", "Truncate", show=True),
         Binding("s", "suppress_print", "Suppress", show=False),
         Binding("p", "toggle_plot", "Plot", show=True),
-        Binding("a", "aggregate_data", "Aggregate", show=True),
+        Binding("A", "aggregate_data", "Aggregate", show=True),
     ]
     CSS_PATH = "h5tui.tcss"
     TITLE = "h5tui"
@@ -225,9 +309,30 @@ class H5TUIApp(App):
             if isinstance(h5elem, h5py.Dataset):
                 return "(DataSet)  "
 
+    def build_attr_str(self, elem):
+        """Creates the has attributes string (▼ + num attrs)"""
+        h5elem = self._file[self._cur_dir + f"/{elem}"]
+        num_attrs = len(h5elem.attrs)
+        if num_attrs > 0:
+            return f"▼ ({num_attrs})"
+        else:
+            return ""
+
     def add_dir_metadata(self):
         items = list(self._file[self._cur_dir].keys())
-        return [self.group_or_dataset(item) + item for item in items]
+        with_type_icon = [self.group_or_dataset(item) + item for item in items]
+        with_attrs = [
+            with_type + f"\t{self.build_attr_str(item)}"
+            for with_type, item in zip(with_type_icon, items)
+        ]
+        return with_attrs
+
+    def get_itemname_from_prompt(self, prompt):
+        """
+        Returns the item name from the selected item
+        The selected item contains an icon for group or dset, itemname and the number of attributes
+        """
+        return prompt.split()[1]
 
     def get_dir_content(self, dir) -> list[str]:
         """Return contents of current path"""
@@ -264,27 +369,43 @@ class H5TUIApp(App):
             "std": float(np.std(self._data)),
             "max": float(np.max(self._data)),
             "min": float(np.min(self._data)),
-            "norm": float(np.linalg.norm(self._data)),
+            "L2 norm": float(np.linalg.norm(self._data)),
         }
 
         return stats
 
-    def action_aggregate_data(self):
-        if not is_aggregatable(self._data):
-            self.notify("Only numeric arrays may be aggregated", severity="warning")
-            return
+    def action_view_attrs(self) -> None:
+        """Action to display the quit dialog."""
+        highlighted = self._column1._selector_widget.highlighted
+        if highlighted is not None:
+            prompt = self._column1._selector_widget.get_option_at_index(
+                highlighted
+            ).prompt
+            selected_item = self.get_itemname_from_prompt(prompt)
+            if self.build_attr_str(selected_item) != "":
+                self.push_screen(
+                    AttributeScreen(self._file, self._cur_dir, selected_item)
+                )
 
-        if not self.is_aggregated:
-            content = self._header_widget._content
-            stats = self.aggregate_data()
-            agg_string = (
-                "\nSummary: "
-                + "; ".join([f"{key} = {value:.5g}" for key, value in stats.items()])
-                + "; "
-            )
-            self.update_header(content + agg_string)
-            self.notify("Summarizing...", timeout=2)
-            self.is_aggregated = True
+    def action_aggregate_data(self):
+        if self.has_class("view-dataset"):
+            if not is_aggregatable(self._data):
+                self.notify("Only numeric arrays may be aggregated", severity="warning")
+                return
+
+            if not self.is_aggregated:
+                content = self._header_widget._content
+                stats = self.aggregate_data()
+                agg_string = (
+                    "\nSummary: "
+                    + "; ".join(
+                        [f"{key} = {value:.5g}" for key, value in stats.items()]
+                    )
+                    + "; "
+                )
+                self.update_header(content + agg_string)
+                self.notify("Summarizing...", timeout=2)
+                self.is_aggregated = True
 
     def action_toggle_dark(self) -> None:
         self.theme = (
@@ -318,9 +439,10 @@ class H5TUIApp(App):
             return
         highlighted = self._column1._selector_widget.highlighted
         if highlighted is not None:
-            selected_item = self._column1._selector_widget.get_option_at_index(
+            prompt = self._column1._selector_widget.get_option_at_index(
                 highlighted
-            ).prompt.split()[-1]
+            ).prompt
+            selected_item = self.get_itemname_from_prompt(prompt)
             path = os.path.join(self._cur_dir, selected_item)
             path = remove_escaped_chars(path)
 
