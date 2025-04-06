@@ -360,7 +360,7 @@ class H5TUIApp(App):
         """
         return prompt.split()[1]
 
-    def get_dir_content(self, dir) -> list[str]:
+    def get_dir_content(self, dir):
         """Return contents of current path"""
         return list(self._file[dir].keys())
 
