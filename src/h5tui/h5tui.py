@@ -109,7 +109,7 @@ class ColumnContent(VerticalScroll):
     def reprint(self):
         """Used to reprint if the numpy formatting is modified"""
         if is_dataframe(self._value):
-            self.notify("Entering dtable: use capital H and L to navigate columns")
+            self.notify("Entering data table: use capital H and L to navigate columns")
             self._df.update(self._value)
             self._df.focus()
 
