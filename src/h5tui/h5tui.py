@@ -43,7 +43,7 @@ class AttributeScreen(ModalScreen):
 
         self._cur_attr = self._attrs[0]
 
-        self._selector_widget = MyOptionList(*self._attrs)
+        self._selector_widget = MyOptionList(*self._attrs, markup=False)
         self._selector_widget.border_title = f"Attributes for {self._itemname}"
 
         self._content_widget = Static(id="attr_content", markup=False)
@@ -249,8 +249,7 @@ class Column(Container):
     def __init__(self, dirs, focus=False):
         super().__init__()
         self._focus = focus
-        escaped_dirs = [add_escape_chars(dir) for dir in dirs]
-        self._selector_widget = MyOptionList(*escaped_dirs, id="dirs")
+        self._selector_widget = MyOptionList(*dirs, id="dirs", markup=False)
         self._content_widget = ColumnContent(id="content")
 
     def compose(self):
@@ -262,8 +261,7 @@ class Column(Container):
     def update_list(self, dirs, prev_highlighted):
         """Redraw option list with contents of current directory"""
         self._selector_widget.clear_options()
-        escaped_dirs = [add_escape_chars(dir) for dir in dirs]
-        self._selector_widget.add_options(escaped_dirs)
+        self._selector_widget.add_options(dirs)
         self._selector_widget.highlighted = prev_highlighted
 
 
@@ -332,7 +330,7 @@ class H5TUIApp(App):
             prompt = self._column1._selector_widget.get_option_at_index(
                 highlighted
             ).prompt
-            selected_item = remove_escaped_chars(self.get_itemname_from_prompt(prompt))
+            selected_item = self.get_itemname_from_prompt(prompt)
             return self.build_attr_str(selected_item) != ""
 
     def build_attr_str(self, elem):
@@ -427,7 +425,7 @@ class H5TUIApp(App):
             prompt = self._column1._selector_widget.get_option_at_index(
                 highlighted
             ).prompt
-            selected_item = remove_escaped_chars(self.get_itemname_from_prompt(prompt))
+            selected_item = self.get_itemname_from_prompt(prompt)
             if self.build_attr_str(selected_item) != "":
                 self.push_screen(
                     AttributeScreen(self._file, self._cur_dir, selected_item)
@@ -501,7 +499,6 @@ class H5TUIApp(App):
             ).prompt
             selected_item = self.get_itemname_from_prompt(prompt)
             path = os.path.join(self._cur_dir, selected_item)
-            path = remove_escaped_chars(path)
 
             if path in self._file:
                 if isinstance(self._file[path], h5py.Group):
