@@ -46,7 +46,7 @@ class AttributeScreen(ModalScreen):
         self._selector_widget = MyOptionList(*self._attrs)
         self._selector_widget.border_title = f"Attributes for {self._itemname}"
 
-        self._content_widget = Static(id="attr_content")
+        self._content_widget = Static(id="attr_content", markup=False)
         self._vertical_widget = VerticalScroll(
             self._content_widget, id="attr_content_scroll"
         )
