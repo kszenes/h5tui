@@ -9,7 +9,6 @@
   background: $boost;
   max-height: 90%;
   padding: 0 1;
-  background: $panel;
 }
 
 OptionList {

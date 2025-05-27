@@ -82,19 +82,15 @@ class AttributeScreen(ModalScreen):
             self.update_content()
 
     def action_scroll_content_down(self):
-        print("scrolling down")
         self._vertical_widget.scroll_down()
 
     def action_scroll_content_up(self):
-        print("scrolling up")
         self._vertical_widget.scroll_up()
 
     def action_scroll_content_page_down(self):
-        print("scrolling DOWN")
         self._vertical_widget.scroll_page_down()
 
     def action_scroll_content_page_up(self):
-        print("scrolling UP")
         self._vertical_widget.scroll_page_up()
 
 
