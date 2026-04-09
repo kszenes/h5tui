@@ -1,21 +1,37 @@
-/* Horizontal row: do not use dock:* on these children — dock removes them from
-   the layout flow and the preview pane was consuming the full width alone. */
+/* Horizontal row: do not use dock:* on #content — dock removes it from layout flow. */
 #browser {
   layout: horizontal;
   height: 1fr;
   width: 100%;
+  /* Outer frame: same hairline as inner column rules */
+  border-left: solid $foreground 12%;
+  border-right: solid $foreground 12%;
 }
 
-#dirs-parent {
+/* Uniform vertical rules. Columns use no fill (window background shows); row
+   selection keeps default block-cursor styling. OptionList defaults to padding 0 1,
+   which insets highlights from the rules — force zero on widget and options. */
+OptionList#dirs-parent,
+OptionList#dirs-current {
   width: 1fr;
   min-width: 18;
   height: 1fr;
+  border: none;
+  border-right: solid $foreground 12%;
+  background: transparent;
+  padding: 0;
 }
 
-#dirs-current {
-  width: 1fr;
-  min-width: 18;
-  height: 1fr;
+OptionList#dirs-parent:focus,
+OptionList#dirs-current:focus {
+  border: none;
+  border-right: solid $foreground 12%;
+  background-tint: transparent;
+}
+
+OptionList#dirs-parent .option-list--option,
+OptionList#dirs-current .option-list--option {
+  padding: 0;
 }
 
 OptionList {
@@ -27,12 +43,16 @@ OptionList {
   width: 2fr;
   min-width: 28;
   height: 1fr;
-  border: tall $primary;
+  border: none;
   background: $boost;
+  padding: 0;
+}
+
+#content #data {
   padding: 0 1;
 }
 
-/* Full-width dataset / plot / table: hide browser columns (toggle with l). */
+/* Full-width dataset / plot / table */
 .preview-maximized #dirs-parent,
 .preview-maximized #dirs-current {
   display: none;
@@ -84,11 +104,15 @@ OptionList {
   display: block;
 }
 
+/* Path line: bold, no box */
 #header {
-  background: $boost;
-  border: tall $success;
+  text-style: bold;
+  background: transparent;
+  border: none;
   padding: 0 1;
-  margin: 1 0;
+  margin: 0;
+  width: 100%;
+  height: auto;
 }
 
 Toast {

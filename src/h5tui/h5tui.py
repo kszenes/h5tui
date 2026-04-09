@@ -1,4 +1,5 @@
 from textual.app import App, ComposeResult
+from textual.reactive import Reactive
 from textual.widgets import Footer, Header, OptionList, Static, DataTable
 from textual.containers import VerticalScroll, Horizontal, Vertical
 from textual.binding import Binding
@@ -257,6 +258,8 @@ class ColumnContent(VerticalScroll):
 
 class H5TUIApp(App):
     """Simple tui application for displaying and navigating h5 files"""
+
+    theme = Reactive("nord")
 
     BINDINGS = [
         Binding("i", "toggle_dark", "Toggle dark mode", show=False),
@@ -606,9 +609,8 @@ class H5TUIApp(App):
                 self.is_aggregated = True
 
     def action_toggle_dark(self) -> None:
-        self.theme = (
-            "textual-dark" if self.theme == "textual-light" else "textual-light"
-        )
+        """Switch between Nord (dark) and Textual light theme."""
+        self.theme = "textual-light" if self.theme == "nord" else "nord"
 
     def action_goto_parent(self) -> None:
         """Either displays parent or hides dataset"""
