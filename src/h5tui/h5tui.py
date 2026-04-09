@@ -278,6 +278,32 @@ def is_aggregatable(obj):
     )
 
 
+def is_histogram_eligible(obj) -> bool:
+    """Plain numeric 1D data suitable for a value histogram (Plotext ``hist`` / ``bar``)."""
+    if not is_plotable(obj):
+        return False
+    a = np.squeeze(np.asarray(obj))
+    return a.ndim == 1 and np.issubdtype(a.dtype, np.number)
+
+
+def _plot_1d_histogram(plot_plt, data: np.ndarray) -> None:
+    """Draw a histogram of ``data`` (1D) using NumPy binning and Plotext ``bar``."""
+    vals = np.asarray(data, dtype=np.float64).ravel()
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        plot_plt.xlabel("Value")
+        plot_plt.ylabel("Count")
+        return
+    n = int(vals.size)
+    bins = min(40, max(10, int(np.sqrt(n))))
+    counts, edges = np.histogram(vals, bins=bins)
+    x = ((edges[:-1] + edges[1:]) / 2).tolist()
+    y = counts.astype(float).tolist()
+    plot_plt.bar(x, y, color="cyan")
+    plot_plt.xlabel("Value")
+    plot_plt.ylabel("Count")
+
+
 def _as_display_1d(arr: np.ndarray) -> np.ndarray:
     """Treat (N,1) / (1,N) numeric columns as 1D for text display."""
     a = np.asarray(arr)
@@ -493,7 +519,9 @@ class ColumnContent(VerticalScroll):
         data = np.squeeze(raw)
         if is_plotable(data):
             self._plot.plt.clear_figure()
-            if data.ndim == 1:
+            if data.ndim == 1 and getattr(self.app, "_plot_histogram", False):
+                _plot_1d_histogram(self._plot.plt, data)
+            elif data.ndim == 1:
                 self._plot.plt.xlabel("Index")
                 self._plot.plt.plot(
                     np.arange(data.shape[0]),
@@ -530,6 +558,7 @@ class H5TUIApp(App):
         Binding("right,l", "goto_child", "Select", show=True),
         Binding("a", "view_attrs", "Attributes", show=True),
         Binding("p", "toggle_plot", "Plot", show=True),
+        Binding("P", "toggle_plot_histogram", "Histogram", show=True),
         Binding("A", "aggregate_data", "Aggregate", show=True),
     ]
     CSS_PATH = "h5tui.tcss"
@@ -553,6 +582,8 @@ class H5TUIApp(App):
 
         self.is_aggregated = False
         self._refresh_guard = False
+        # When True, 1D plot view shows a value histogram instead of index vs value.
+        self._plot_histogram = False
         # Full header text while a dataset is open (used for aggregate; avoids broken
         # concatenation from Static.content / non-string renderables).
         self._dataset_detail_header = ""
@@ -617,6 +648,19 @@ class H5TUIApp(App):
         if highlighted < 0 or highlighted >= len(items):
             return None
         return items[highlighted]
+
+    def get_selected_dataset_path(self) -> str | None:
+        """POSIX path to the highlighted item if it is a :class:`h5py.Dataset`, else ``None``."""
+        name = self.get_selected_itemname()
+        if name is None:
+            return None
+        path = h5_child_path(self._cur_dir, name)
+        try:
+            if path in self._file and isinstance(self._file[path], h5py.Dataset):
+                return path
+        except Exception:
+            pass
+        return None
 
     def has_attr(self):
         """Return if the currently selected item has attributes"""
@@ -683,8 +727,7 @@ class H5TUIApp(App):
 
     def _dataset_preview_block(self, dset: h5py.Dataset) -> str:
         lw = int(self._preview_line_width)
-        name = os.path.basename(dset.name.rstrip("/")) or dset.name
-        lines = [name, f"shape: {dset.shape}", f"dtype: {dset.dtype}"]
+        lines = [f"shape: {dset.shape}", f"dtype: {dset.dtype}\n"]
         if dset.size == 0:
             lines.append("(empty)")
             return "\n".join(lines)
@@ -724,6 +767,7 @@ class H5TUIApp(App):
         self.is_aggregated = False
         self._dataset_detail_header = ""
         self._data = None
+        self._plot_histogram = False
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
         self.remove_class("view-dtable")
@@ -733,6 +777,10 @@ class H5TUIApp(App):
         """Update the preview pane from the Current column selection (browse mode)."""
         if self.has_class("view-dataset"):
             return
+        if self.has_class("view-plot") and not self.has_class("view-dataset"):
+            self.remove_class("view-plot")
+            self._plot_histogram = False
+            self._data = None
         self._preview.remove_class("empty-group-preview")
         name = self.get_selected_itemname()
         if name is None:
@@ -799,6 +847,8 @@ class H5TUIApp(App):
 
     def update_content(self, path):
         self._preview.remove_class("empty-group-preview")
+        self.remove_class("view-plot")
+        self._plot_histogram = False
         try:
             dset = self._file[path]
             dset_shape = dset.shape
@@ -847,13 +897,7 @@ class H5TUIApp(App):
         return stats
 
     def check_action(self, action, parameters):
-        if (
-            action
-            in [
-                "toggle_plot",
-                "aggregate_data",
-            ]
-        ) and not self.has_class("view-dataset"):
+        if action == "aggregate_data" and not self.has_class("view-dataset"):
             return False
         elif action in ["cursor_down", "cursor_up"] and self.has_class("view-dataset"):
             return False
@@ -872,6 +916,14 @@ class H5TUIApp(App):
         """Leave full dataset / table / plot view and return focus to the file columns."""
         if isinstance(self.screen, AttributeScreen):
             return
+        if self.has_class("view-plot") and not self.has_class("view-dataset"):
+            self.remove_class("view-plot")
+            self._plot_histogram = False
+            self._data = None
+            self.refresh_preview()
+            self._current_list.focus()
+            self.refresh_bindings()
+            return
         if self.has_class("view-dataset"):
             self.action_goto_parent()
 
@@ -883,7 +935,12 @@ class H5TUIApp(App):
         """``q``: leave plot or dataset view if open; otherwise quit (file browser only)."""
         if self.has_class("view-plot"):
             self.remove_class("view-plot")
-            if self.has_class("view-dtable"):
+            self._plot_histogram = False
+            if not self.has_class("view-dataset"):
+                self._data = None
+                self.refresh_preview()
+                self._current_list.focus()
+            elif self.has_class("view-dtable"):
                 self._preview._df.focus()
             else:
                 self._preview.focus()
@@ -955,6 +1012,10 @@ class H5TUIApp(App):
     def action_goto_child(self) -> None:
         """Open a group/dataset, or toggle full-width preview when a dataset is open."""
         if self.has_class("view-dataset"):
+            # Do not toggle layout while the plot is visible: ``l`` / right would otherwise
+            # feel like a random "revert" (columns reappear, focus jumps to the file list).
+            if self.has_class("view-plot"):
+                return
             # Hide Parent + Current columns so the dataset view uses the full width.
             self.toggle_class("preview-maximized")
             if self.has_class("preview-maximized"):
@@ -986,11 +1047,14 @@ class H5TUIApp(App):
     def action_toggle_plot(self):
         if self.has_class("view-dataset"):
             if is_plotable(self._data):
-                if not self.has_class("view-plot"):
+                opening = not self.has_class("view-plot")
+                if opening:
+                    self._plot_histogram = False
                     self.notify("Plotting...", timeout=2)
                 self.toggle_class("view-plot")
                 self._preview.replot()
                 if not self.has_class("view-plot"):
+                    self._plot_histogram = False
                     if self.has_class("view-dtable"):
                         self._preview._df.focus()
                     else:
@@ -999,6 +1063,94 @@ class H5TUIApp(App):
                 self.notify(
                     "Currently only 1D and 2D data is plotable", severity="warning"
                 )
+            return
+
+        # Browse mode: plot the selected dataset without opening full preview (``l``).
+        if self.has_class("view-plot") and not self.has_class("view-dataset"):
+            self.remove_class("view-plot")
+            self._plot_histogram = False
+            self._data = None
+            self.refresh_preview()
+            self._current_list.focus()
+            self.refresh_bindings()
+            return
+
+        path = self.get_selected_dataset_path()
+        if path is None:
+            self.notify(
+                "Select a dataset in the file list to plot",
+                severity="warning",
+                timeout=2,
+            )
+            return
+        try:
+            dset_data = np.asarray(self._file[path][...])
+        except Exception as e:
+            self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+            return
+        if not is_plotable(dset_data):
+            self.notify(
+                "Only 1D and 2D numeric data can be plotted",
+                severity="warning",
+                timeout=2,
+            )
+            return
+        self._plot_histogram = False
+        self._data = dset_data
+        self.notify("Plotting...", timeout=2)
+        self.add_class("view-plot")
+        self._preview.replot()
+        # Keep focus on the file list so j/k and arrows still change selection.
+        self._current_list.focus()
+        self.refresh_bindings()
+
+    def action_toggle_plot_histogram(self) -> None:
+        """Show a value histogram for 1D numeric data (``P``)."""
+        if self.has_class("view-dataset"):
+            if self._data is None or not is_histogram_eligible(self._data):
+                self.notify(
+                    "Histogram is only available for 1D numeric datasets",
+                    severity="warning",
+                    timeout=2,
+                )
+                return
+            self._plot_histogram = True
+            if not self.has_class("view-plot"):
+                self.notify("Histogram…", timeout=1.5)
+                self.add_class("view-plot")
+            self._preview.replot()
+            self._preview.focus()
+            return
+
+        path = self.get_selected_dataset_path()
+        if path is None:
+            self.notify(
+                "Select a 1D numeric dataset in the file list",
+                severity="warning",
+                timeout=2,
+            )
+            return
+        try:
+            dset_data = np.asarray(self._file[path][...])
+        except Exception as e:
+            self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+            return
+        self._data = dset_data
+        if not is_histogram_eligible(self._data):
+            self._data = None
+            self.notify(
+                "Histogram is only available for 1D numeric datasets",
+                severity="warning",
+                timeout=2,
+            )
+            return
+        self._plot_histogram = True
+        if not self.has_class("view-plot"):
+            self.notify("Histogram…", timeout=1.5)
+        self.add_class("view-plot")
+        self._preview.replot()
+        self._current_list.focus()
+        self.refresh_bindings()
 
 
 def check_file_validity(fname):
