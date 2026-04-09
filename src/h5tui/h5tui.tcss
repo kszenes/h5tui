@@ -1,24 +1,63 @@
-#list-widget {
-  dock: top;
+/* Horizontal row: do not use dock:* on these children — dock removes them from
+   the layout flow and the preview pane was consuming the full width alone. */
+#browser {
+  layout: horizontal;
+  height: 1fr;
+  width: 100%;
 }
 
-#content {
-  dock: top;
-  display: none;
-  border: tall $primary;
-  background: $boost;
-  max-height: 90%;
-  padding: 0 1;
+#dirs-parent {
+  width: 1fr;
+  min-width: 18;
+  height: 1fr;
+}
+
+#dirs-current {
+  width: 1fr;
+  min-width: 18;
+  height: 1fr;
 }
 
 OptionList {
-  max-height: 95%;
+  height: 1fr;
+  min-height: 5;
 }
 
-.view-dataset #dirs {
+#content {
+  width: 2fr;
+  min-width: 28;
+  height: 1fr;
+  border: tall $primary;
+  background: $boost;
+  padding: 0 1;
+}
+
+/* Full-width dataset / plot / table: hide browser columns (toggle with l). */
+.preview-maximized #dirs-parent,
+.preview-maximized #dirs-current {
   display: none;
 }
-.view-dataset #content {
+
+.preview-maximized #content {
+  width: 1fr;
+  min-width: 0;
+}
+
+#data {
+  width: 100%;
+}
+
+#plot {
+  dock: top;
+  display: none;
+}
+
+#dtable {
+  dock: top;
+  display: none;
+}
+
+.view-dataset #data {
   display: block;
 }
 .view-dataset #dtable {
@@ -42,15 +81,6 @@ OptionList {
   display: none;
 }
 .view-dtable #dtable {
-  display: block;
-}
-
-#plot {
-  dock: top;
-  display: none;
-}
-#dtable {
-  dock: top;
   display: block;
 }
 

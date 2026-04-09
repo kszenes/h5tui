@@ -1,6 +1,6 @@
 from textual.app import App, ComposeResult
 from textual.widgets import Footer, Header, OptionList, Static, DataTable
-from textual.containers import VerticalScroll, Horizontal, Container, Vertical
+from textual.containers import VerticalScroll, Horizontal, Vertical
 from textual.binding import Binding
 from textual.screen import ModalScreen
 from textual_plotext import PlotextPlot
@@ -14,6 +14,23 @@ import os
 import argparse
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
+
+
+def h5_child_path(parent: str, name: str) -> str:
+    """Join HDF5 posix path `parent` with child `name`."""
+    if parent == "/":
+        return f"/{name}"
+    return f"{parent}/{name}"
+
+
+def h5_parent_path(path: str) -> str | None:
+    """Parent HDF5 group path, or None if `path` is the file root."""
+    if not path or path == "/":
+        return None
+    parent = os.path.dirname(path)
+    if parent == path:
+        return None
+    return parent or "/"
 
 
 class AttributeScreen(ModalScreen):
@@ -38,7 +55,7 @@ class AttributeScreen(ModalScreen):
         self._file = h5file
         self._cur_dir = cur_dir
         self._itemname = itemname
-        self._item = self._file[self._cur_dir + f"/{self._itemname}"]
+        self._item = self._file[h5_child_path(self._cur_dir, self._itemname)]
         self._attrs = list(self._item.attrs.keys())
 
         self._cur_attr = self._attrs[0]
@@ -238,28 +255,6 @@ class ColumnContent(VerticalScroll):
                 self._plot.plt.ylabel("Row")
 
 
-class Column(Container):
-    """Column which shows directory structure and selector"""
-
-    def __init__(self, dirs, focus=False):
-        super().__init__()
-        self._focus = focus
-        self._selector_widget = MyOptionList(*dirs, id="dirs", markup=False)
-        self._content_widget = ColumnContent(id="content")
-
-    def compose(self):
-        yield self._selector_widget
-        yield self._content_widget
-        if self._focus:
-            self._selector_widget.focus()
-
-    def update_list(self, dirs, prev_highlighted):
-        """Redraw option list with contents of current directory"""
-        self._selector_widget.clear_options()
-        self._selector_widget.add_options(dirs)
-        self._selector_widget.highlighted = prev_highlighted
-
-
 class H5TUIApp(App):
     """Simple tui application for displaying and navigating h5 files"""
 
@@ -284,7 +279,6 @@ class H5TUIApp(App):
         self._file = h5py.File(fname)
 
         self._cur_dir = str(self._file.name)
-        self._dirs = self.get_dir_content(self._cur_dir)
 
         self._prev_highlighted = 0
 
@@ -293,6 +287,10 @@ class H5TUIApp(App):
         np.set_printoptions(linewidth=self.size.width)
 
         self.is_aggregated = False
+        self._refresh_guard = False
+        # Full header text while a dataset is open (used for aggregate; avoids broken
+        # concatenation from Static.content / non-string renderables).
+        self._dataset_detail_header = ""
 
     def on_unmount(self) -> None:
         self._file.close()
@@ -303,13 +301,26 @@ class H5TUIApp(App):
 
         self._header_widget = Static("Path: /", id="header", markup=False)
         yield self._header_widget
-        with Horizontal():
-            dir_with_metadata = self.add_dir_metadata()
-            self._column1 = Column(dir_with_metadata, focus=True)
-            yield self._column1
+        with Horizontal(id="browser"):
+            self._parent_list = MyOptionList(id="dirs-parent", markup=False)
+            self._current_list = MyOptionList(id="dirs-current", markup=False)
+            self._preview = ColumnContent(id="content")
+            yield self._parent_list
+            yield self._current_list
+            yield self._preview
 
-    def group_or_dataset(self, elem):
-        h5elem = self._file[self._cur_dir + f"/{elem}"]
+    def on_mount(self) -> None:
+        self._parent_list.border_title = "Parent"
+        self._current_list.border_title = "Current"
+        self._preview.border_title = "Preview"
+        self.refresh_parent_column()
+        self.refresh_current_column(0)
+        self.refresh_preview()
+        self._current_list.focus()
+
+    def group_or_dataset(self, dir_path: str, elem: str):
+        path = h5_child_path(dir_path, elem)
+        h5elem = self._file[path]
         if UNICODE_SUPPORT:
             if isinstance(h5elem, h5py.Group):
                 return "📁  "
@@ -321,9 +332,16 @@ class H5TUIApp(App):
             if isinstance(h5elem, h5py.Dataset):
                 return "(DataSet)  "
 
+    def metadata_line_for_item(self, dir_path: str, item: str) -> str:
+        return (
+            self.group_or_dataset(dir_path, item)
+            + item
+            + f"    {self.build_attr_str(dir_path, item)}"
+        )
+
     def get_selected_itemname(self):
-        """Return the HDF5 child name for the highlighted row, or None."""
-        highlighted = self._column1._selector_widget.highlighted
+        """Return the HDF5 child name for the highlighted row in Current, or None."""
+        highlighted = self._current_list.highlighted
         if highlighted is None:
             return None
         items = self.get_dir_content(self._cur_dir)
@@ -336,29 +354,159 @@ class H5TUIApp(App):
         selected_item = self.get_selected_itemname()
         if selected_item is None:
             return False
-        return self.build_attr_str(selected_item) != ""
+        return self.build_attr_str(self._cur_dir, selected_item) != ""
 
-    def build_attr_str(self, elem):
+    def build_attr_str(self, dir_path: str, elem: str):
         """Creates the has attributes string (▼ + num attrs)"""
-        h5elem = self._file[self._cur_dir + f"/{elem}"]
+        path = h5_child_path(dir_path, elem)
+        h5elem = self._file[path]
         num_attrs = len(h5elem.attrs)
         if num_attrs > 0:
             return f"▼ ({num_attrs})"
         else:
             return ""
 
-    def add_dir_metadata(self):
-        items = list(self._file[self._cur_dir].keys())
-        with_type_icon = [self.group_or_dataset(item) + item for item in items]
-        with_attrs = [
-            with_type + f"    {self.build_attr_str(item)}"
-            for with_type, item in zip(with_type_icon, items)
-        ]
-        return with_attrs
+    def add_dir_metadata_for(self, dir_path: str):
+        items = list(self._file[dir_path].keys())
+        return [self.metadata_line_for_item(dir_path, item) for item in items]
+
+    def add_dir_metadata(self, dir_path=None):
+        dir_path = dir_path or self._cur_dir
+        return self.add_dir_metadata_for(dir_path)
 
     def get_dir_content(self, dir):
         """Return contents of current path"""
         return list(self._file[dir].keys())
+
+    def refresh_parent_column(self) -> None:
+        pdir = h5_parent_path(self._cur_dir)
+        if pdir is None:
+            self._parent_list.border_title = "Parent · /"
+            self._parent_list.clear_options()
+            return
+        self._parent_list.border_title = f"Parent · {pdir}"
+        items = self.get_dir_content(pdir)
+        opts = self.add_dir_metadata_for(pdir)
+        self._parent_list.clear_options()
+        self._parent_list.add_options(opts)
+        target = os.path.basename(self._cur_dir.rstrip("/"))
+        try:
+            hi = items.index(target)
+        except ValueError:
+            hi = 0 if items else None
+        self._refresh_guard = True
+        try:
+            if hi is not None and items:
+                self._parent_list.highlighted = hi
+        finally:
+            self._refresh_guard = False
+
+    def refresh_current_column(self, prev_highlighted: int = 0) -> None:
+        self._current_list.border_title = "Current"
+        opts = self.add_dir_metadata()
+        self._current_list.clear_options()
+        self._current_list.add_options(opts)
+        n = len(opts)
+        if n == 0:
+            self._current_list.highlighted = None
+        else:
+            self._current_list.highlighted = min(prev_highlighted, n - 1)
+
+    def _dataset_preview_block(self, dset: h5py.Dataset) -> str:
+        name = os.path.basename(dset.name.rstrip("/")) or dset.name
+        lines = [name, f"shape: {dset.shape}", f"dtype: {dset.dtype}"]
+        if dset.size == 0:
+            lines.append("(empty)")
+            return "\n".join(lines)
+        if len(dset.dtype) != 0:
+            lines.append("(compound dtype — press l for table view)")
+            return "\n".join(lines)
+        if dset.size <= 128:
+            arr = np.asarray(dset[...])
+            lines.append(np.array2string(arr, threshold=100, edgeitems=3))
+            return "\n".join(lines)
+        if dset.ndim == 1:
+            n = min(24, dset.shape[0])
+            lines.append(np.array2string(np.asarray(dset[:n]), threshold=n + 1))
+            lines.append("… (press l for full view)")
+        elif dset.ndim == 2:
+            r = min(6, dset.shape[0])
+            c = min(10, dset.shape[1])
+            lines.append(
+                np.array2string(np.asarray(dset[:r, :c]), threshold=200, edgeitems=2)
+            )
+            lines.append("… (press l for full view)")
+        else:
+            lines.append("(large array — press l for full view)")
+        return "\n".join(lines)
+
+    def _clear_detail_view_state(self) -> None:
+        """Leave full dataset / plot / table view and restore default printing."""
+        self.is_aggregated = False
+        self._dataset_detail_header = ""
+        self.remove_class("view-dataset")
+        self.remove_class("view-plot")
+        self.remove_class("view-dtable")
+        self.remove_class("preview-maximized")
+        np.set_printoptions(suppress=False, threshold=1000)
+
+    def refresh_preview(self) -> None:
+        """Update the preview pane from the Current column selection (browse mode)."""
+        if self.has_class("view-dataset"):
+            return
+        name = self.get_selected_itemname()
+        if name is None:
+            self._preview._content.update("(empty directory)")
+            return
+        path = h5_child_path(self._cur_dir, name)
+        node = self._file[path]
+        if isinstance(node, h5py.Group):
+            keys = list(node.keys())
+            if not keys:
+                text = "(empty group)"
+            else:
+                shown = keys[:80]
+                more = len(keys) - len(shown)
+                lines = [self.metadata_line_for_item(path, k) for k in shown]
+                text = "\n".join(lines)
+                if more > 0:
+                    text += f"\n… ({more} more)"
+            self._preview._content.update(text)
+        elif isinstance(node, h5py.Dataset):
+            self._preview._content.update(self._dataset_preview_block(node))
+
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
+        if self._refresh_guard:
+            return
+        oid = event.option_list.id
+        if oid == "dirs-parent":
+            pdir = h5_parent_path(self._cur_dir)
+            if pdir is None:
+                return
+            keys = self.get_dir_content(pdir)
+            idx = event.option_index
+            if idx < 0 or idx >= len(keys):
+                return
+            new_dir = h5_child_path(pdir, keys[idx])
+            if new_dir == self._cur_dir:
+                return
+            self._cur_dir = new_dir
+            self._prev_highlighted = 0
+            self._clear_detail_view_state()
+            self.refresh_current_column(0)
+            self.refresh_parent_column()
+            self.refresh_preview()
+            self.update_header(f"Path: {self._cur_dir}")
+            self.refresh_bindings()
+            return
+        if oid == "dirs-current":
+            # Mouse (or other) moves the highlight while a dataset is open: leave
+            # full view so the preview matches the new selection.
+            if self.has_class("view-dataset"):
+                self._clear_detail_view_state()
+            self.refresh_preview()
 
     def update_content(self, path):
         dset = self._file[path]
@@ -369,18 +517,21 @@ class H5TUIApp(App):
         self._data = dset_data
 
         self.add_class("view-dataset")
+        self.add_class("preview-maximized")
         if is_dataframe(self._data):
             self.add_class("view-dtable")
             dset_dtype = [str(field[0]) for field in dset.dtype.fields.values()]
         else:
             dset_dtype = dset.dtype
 
-        self._column1._content_widget.update_value(self._data)
-        self._column1._content_widget.reprint()
+        self._preview.update_value(self._data)
+        self._preview.reprint()
 
-        self.update_header(
+        self._dataset_detail_header = (
             f"Path: {self._cur_dir}\nDataset: {dset_name} <{dset_dtype}> {dset_shape}"
         )
+        self.update_header(self._dataset_detail_header)
+        self._preview.focus()
 
     def update_header(self, string):
         self._header_widget.update(string)
@@ -407,8 +558,6 @@ class H5TUIApp(App):
             ]
         ) and not self.has_class("view-dataset"):
             return False
-        elif action == "goto_child" and self.has_class("view-dataset"):
-            return False
         elif action in ["cursor_down", "cursor_up"] and self.has_class("view-dataset"):
             return False
         elif action == "view_attrs" and not self.has_attr():
@@ -420,7 +569,7 @@ class H5TUIApp(App):
         """Open a modal listing attributes for the selected group or dataset."""
         selected_item = self.get_selected_itemname()
         if selected_item is not None:
-            if self.build_attr_str(selected_item) != "":
+            if self.build_attr_str(self._cur_dir, selected_item) != "":
                 self.push_screen(
                     AttributeScreen(self._file, self._cur_dir, selected_item)
                 )
@@ -442,7 +591,7 @@ class H5TUIApp(App):
                 return
 
             if not self.is_aggregated:
-                content = self._header_widget._content
+                base = self._dataset_detail_header or f"Path: {self._cur_dir}"
                 stats = self.aggregate_data()
                 agg_string = (
                     "\nSummary: "
@@ -451,7 +600,8 @@ class H5TUIApp(App):
                     )
                     + "; "
                 )
-                self.update_header(content + agg_string)
+                self._dataset_detail_header = base + agg_string
+                self.update_header(self._dataset_detail_header)
                 self.notify("Summarizing...", timeout=2)
                 self.is_aggregated = True
 
@@ -466,37 +616,38 @@ class H5TUIApp(App):
         if has_parent_dir and not self.has_class("view-dataset"):
             self._cur_dir = os.path.dirname(self._cur_dir)
             self._header_widget.update(f"Path: {self._cur_dir}")
-            self._column1.update_list(self.add_dir_metadata(), self._prev_highlighted)
-        self.is_aggregated = False
-        self.remove_class("view-dataset")
-        self.remove_class("view-plot")
-        self.remove_class("view-dtable")
-        self._column1._selector_widget.focus()
-        # These are the default numpy print setting
-        np.set_printoptions(suppress=False, threshold=1000)
+            self.refresh_current_column(self._prev_highlighted)
+            self.refresh_parent_column()
+        self._clear_detail_view_state()
+        self._current_list.focus()
         self.update_header(f"Path: {self._cur_dir}")
+        self.refresh_preview()
         self.refresh_bindings()
 
     def action_goto_child(self) -> None:
-        """Either displays child or dataset"""
-        if (
-            self.has_class("view-dataset")
-            or self.has_class("view-plot")
-            or self.has_class("view-dtable")
-        ):
-            # Does not do anything if data is already being viewed
+        """Open a group/dataset, or toggle full-width preview when a dataset is open."""
+        if self.has_class("view-dataset"):
+            # Hide Parent + Current columns so the dataset view uses the full width.
+            self.toggle_class("preview-maximized")
+            if self.has_class("preview-maximized"):
+                self._preview.focus()
+            else:
+                self._current_list.focus()
+            self.refresh_bindings()
             return
         selected_item = self.get_selected_itemname()
         if selected_item is not None:
-            path = os.path.join(self._cur_dir, selected_item)
-            highlighted = self._column1._selector_widget.highlighted
+            path = h5_child_path(self._cur_dir, selected_item)
+            highlighted = self._current_list.highlighted
 
             if path in self._file:
                 if isinstance(self._file[path], h5py.Group):
                     self._prev_highlighted = highlighted
                     self._cur_dir = path
                     self._header_widget.update(f"Path: {self._cur_dir}")
-                    self._column1.update_list(self.add_dir_metadata(), 0)
+                    self.refresh_current_column(0)
+                    self.refresh_parent_column()
+                    self.refresh_preview()
                 else:
                     self.update_content(path)
         self.refresh_bindings()
@@ -512,7 +663,7 @@ class H5TUIApp(App):
             else:
                 np.set_printoptions(threshold=sys.maxsize)
                 self.notify("Truncation: OFF", timeout=2)
-            self._column1._content_widget.reprint()
+            self._preview.reprint()
 
     def action_suppress_print(self):
         """Change numpy printing by suppression"""
@@ -524,7 +675,7 @@ class H5TUIApp(App):
             else:
                 np.set_printoptions(suppress=False)
                 self.notify("Suppression: OFF", timeout=1)
-            self._column1._content_widget.reprint()
+            self._preview.reprint()
 
     def action_toggle_plot(self):
         if self.has_class("view-dataset"):
@@ -532,7 +683,7 @@ class H5TUIApp(App):
                 if not self.has_class("view-plot"):
                     self.notify("Plotting...", timeout=2)
                 self.toggle_class("view-plot")
-                self._column1._content_widget.replot()
+                self._preview.replot()
             else:
                 self.notify(
                     "Currently only 1D and 2D data is plotable", severity="warning"
