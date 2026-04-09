@@ -1,4 +1,5 @@
 from textual.app import App, ComposeResult
+from textual.events import Resize
 from textual.reactive import Reactive
 from textual.widgets import Footer, Header, OptionList, Static, DataTable
 from textual.containers import VerticalScroll, Horizontal, Vertical
@@ -16,6 +17,11 @@ import os
 import argparse
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
+
+# NumPy ndarray text formatting (explicit kwargs; do not rely on np.set_printoptions).
+_ND_THRESHOLD = 1000
+_ND_EDGEITEMS = 3
+_ND_LINEWIDTH_DEFAULT = 75
 
 
 def h5_child_path(parent: str, name: str) -> str:
@@ -361,9 +367,8 @@ def format_1d_with_indices(arr: np.ndarray) -> str:
     """Format 1D data as label column + ``val`` (browse preview); respects threshold/edgeitems."""
     a = np.asarray(arr)
     n = int(a.shape[0])
-    opts = np.get_printoptions()
-    threshold = int(opts.get("threshold", 1000))
-    edgeitems = int(opts.get("edgeitems", 3))
+    threshold = _ND_THRESHOLD
+    edgeitems = _ND_EDGEITEMS
     idxw = max(1, len(str(max(0, n - 1))))
 
     if n == 0:
@@ -385,17 +390,18 @@ def format_1d_with_indices(arr: np.ndarray) -> str:
     return header + "\n" + "\n".join(parts)
 
 
-def format_ndarray_text(arr: np.ndarray) -> str:
+def format_ndarray_text(
+    arr: np.ndarray, *, line_width: int = _ND_LINEWIDTH_DEFAULT
+) -> str:
     """Human-readable ndarray text; 1D uses indexed rows, other shapes use array2string."""
     a = _as_display_1d(np.asarray(arr))
     if is_plain_1d_array(a):
         return format_1d_with_indices(a)
-    opts = np.get_printoptions()
     return np.array2string(
         a,
-        max_line_width=int(opts.get("linewidth", 75)),
-        threshold=int(opts.get("threshold", 1000)),
-        edgeitems=int(opts.get("edgeitems", 3)),
+        max_line_width=line_width,
+        threshold=_ND_THRESHOLD,
+        edgeitems=_ND_EDGEITEMS,
         suppress_small=False,
     )
 
@@ -453,29 +459,34 @@ class ColumnContent(VerticalScroll):
         yield self._plot
         yield self._df
 
-    def update_value(self, value):
-        self._value = value
-
     def reprint(self):
-        """Refresh dataset text or table content for the current value."""
-        if is_dataframe(self._value):
+        """Refresh dataset text or table content using ``H5TUIApp._data``."""
+        app = self.app
+        data = getattr(app, "_data", None)
+        if data is None:
+            return
+        lw = int(getattr(app, "_preview_line_width", _ND_LINEWIDTH_DEFAULT))
+        if is_dataframe(data):
             self.notify("Table: h/j/k/l navigate; H/J/K/L jump; y copy; esc quit")
-            self._df.update(self._value)
+            self._df.update(data)
             self._df.focus()
-        elif should_use_1d_table(self._value):
+        elif should_use_1d_table(data):
             self.notify("keys: j/k navigate; J/K jump; y copy; esc quit")
-            self._df.update_1d(_as_display_1d(np.asarray(self._value)))
+            self._df.update_1d(_as_display_1d(np.asarray(data)))
             self._df.focus()
-        elif should_use_2d_table(self._value):
+        elif should_use_2d_table(data):
             self.notify("keys: h/j/k/l navigate; H/J/K/L jump; y copy; esc quit")
-            self._df.update_2d(np.asarray(self._value))
+            self._df.update_2d(np.asarray(data))
             self._df.focus()
         else:
-            self._content.update(format_ndarray_text(np.asarray(self._value)))
+            self._content.update(format_ndarray_text(np.asarray(data), line_width=lw))
 
     def replot(self):
         """Plot data, currently only supports 1D and 2D data"""
-        data = np.squeeze(self._value)
+        raw = getattr(self.app, "_data", None)
+        if raw is None:
+            return
+        data = np.squeeze(raw)
         if is_plotable(data):
             self._plot.plt.clear_figure()
             if data.ndim == 1:
@@ -523,13 +534,17 @@ class H5TUIApp(App):
         super().__init__()
 
         self._fname = fname
-        self._file = h5py.File(fname)
+        try:
+            self._file = h5py.File(fname, "r")
+        except OSError as e:
+            print(f"Could not open HDF5 file: {e}", file=sys.stderr)
+            sys.exit(1)
 
         self._cur_dir = str(self._file.name)
 
         self._prev_highlighted = 0
-
-        np.set_printoptions(linewidth=self.size.width)
+        self._preview_line_width = _ND_LINEWIDTH_DEFAULT
+        self._data = None
 
         self.is_aggregated = False
         self._refresh_guard = False
@@ -555,6 +570,7 @@ class H5TUIApp(App):
             yield self._preview
 
     def on_mount(self) -> None:
+        self._preview_line_width = max(40, self.size.width)
         self._parent_list.border_title = "Parent"
         self._current_list.border_title = "Current"
         self._preview.border_title = "Preview"
@@ -562,6 +578,9 @@ class H5TUIApp(App):
         self.refresh_current_column(0)
         self.refresh_preview()
         self._current_list.focus()
+
+    def on_resize(self, event: Resize) -> None:
+        self._preview_line_width = max(40, event.size.width)
 
     def group_or_dataset(self, dir_path: str, elem: str):
         path = h5_child_path(dir_path, elem)
@@ -658,6 +677,7 @@ class H5TUIApp(App):
             self._current_list.highlighted = min(prev_highlighted, n - 1)
 
     def _dataset_preview_block(self, dset: h5py.Dataset) -> str:
+        lw = int(self._preview_line_width)
         name = os.path.basename(dset.name.rstrip("/")) or dset.name
         lines = [name, f"shape: {dset.shape}", f"dtype: {dset.dtype}"]
         if dset.size == 0:
@@ -666,34 +686,43 @@ class H5TUIApp(App):
         if len(dset.dtype) != 0:
             lines.append("(compound dtype — press l for table view)")
             return "\n".join(lines)
-        if dset.size <= 128:
-            arr = np.asarray(dset[...])
-            lines.append(format_ndarray_text(arr))
-            return "\n".join(lines)
-        if dset.ndim == 1:
-            n = min(24, dset.shape[0])
-            lines.append(format_ndarray_text(np.asarray(dset[:n])))
-            lines.append("… (press l for full view)")
-        elif dset.ndim == 2:
-            r = min(6, dset.shape[0])
-            c = min(10, dset.shape[1])
-            lines.append(
-                np.array2string(np.asarray(dset[:r, :c]), threshold=200, edgeitems=2)
-            )
-            lines.append("… (press l for full view)")
-        else:
-            lines.append("(large array — press l for full view)")
+        try:
+            if dset.size <= 128:
+                arr = np.asarray(dset[...])
+                lines.append(format_ndarray_text(arr, line_width=lw))
+                return "\n".join(lines)
+            if dset.ndim == 1:
+                n = min(24, dset.shape[0])
+                lines.append(format_ndarray_text(np.asarray(dset[:n]), line_width=lw))
+                lines.append("… (press l for full view)")
+            elif dset.ndim == 2:
+                r = min(6, dset.shape[0])
+                c = min(10, dset.shape[1])
+                lines.append(
+                    np.array2string(
+                        np.asarray(dset[:r, :c]),
+                        max_line_width=lw,
+                        threshold=200,
+                        edgeitems=2,
+                        suppress_small=False,
+                    )
+                )
+                lines.append("… (press l for full view)")
+            else:
+                lines.append("(large array — press l for full view)")
+        except Exception as e:
+            lines.append(f"(could not read data: {e})")
         return "\n".join(lines)
 
     def _clear_detail_view_state(self) -> None:
         """Leave full dataset / plot / table view and restore default printing."""
         self.is_aggregated = False
         self._dataset_detail_header = ""
+        self._data = None
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
         self.remove_class("view-dtable")
         self.remove_class("preview-maximized")
-        np.set_printoptions(threshold=1000)
 
     def refresh_preview(self) -> None:
         """Update the preview pane from the Current column selection (browse mode)."""
@@ -705,9 +734,17 @@ class H5TUIApp(App):
             self._preview._content.update("(empty directory)")
             return
         path = h5_child_path(self._cur_dir, name)
-        node = self._file[path]
+        try:
+            node = self._file[path]
+        except Exception as e:
+            self._preview._content.update(f"(could not open item: {e})")
+            return
         if isinstance(node, h5py.Group):
-            keys = list(node.keys())
+            try:
+                keys = list(node.keys())
+            except Exception as e:
+                self._preview._content.update(f"(could not read group: {e})")
+                return
             if not keys:
                 self._preview.add_class("empty-group-preview")
                 self._preview._content.update("\nNo Content")
@@ -757,10 +794,13 @@ class H5TUIApp(App):
 
     def update_content(self, path):
         self._preview.remove_class("empty-group-preview")
-        dset = self._file[path]
-        dset_name = os.path.basename(path)
-        dset_shape = dset.shape
-        dset_data = dset[...]
+        try:
+            dset = self._file[path]
+            dset_shape = dset.shape
+            dset_data = dset[...]
+        except Exception as e:
+            self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+            return
 
         self._data = dset_data
 
@@ -774,11 +814,10 @@ class H5TUIApp(App):
             if should_use_ndarray_datatable(self._data):
                 self.add_class("view-dtable")
 
-        self._preview.update_value(self._data)
         self._preview.reprint()
 
         self._dataset_detail_header = (
-            f"Path: {self._cur_dir}\nDataset: {dset_name} <{dset_dtype}> {dset_shape}"
+            f"Path: {path}\nDataset: <{dset_dtype}> {dset_shape}"
         )
         self.update_header(self._dataset_detail_header)
         # Focus DataTable when it is the active view; focusing the parent ColumnContent
