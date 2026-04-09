@@ -166,9 +166,15 @@ class MyDataTable(DataTable):
         if self.row_count == 0 or not self.columns:
             return
         ct = self.cursor_type
-        if self.show_cursor and ct in ("cell", "row"):
-            r, _ = self.cursor_coordinate
+        if not self.show_cursor or ct == "none":
+            super().action_scroll_up()
+            return
+        r, c = self.cursor_coordinate
+        if ct in ("cell", "row"):
             self.move_cursor(row=max(0, r - self._JUMP), scroll=True)
+        elif ct == "column":
+            # Native ``j`` / ``k`` only scroll for column cursor; keep J/K as vertical jump.
+            self.move_cursor(row=max(0, r - self._JUMP), column=c, scroll=True)
         else:
             super().action_scroll_up()
 
@@ -177,9 +183,16 @@ class MyDataTable(DataTable):
         if self.row_count == 0 or not self.columns:
             return
         ct = self.cursor_type
-        if self.show_cursor and ct in ("cell", "row"):
-            r, _ = self.cursor_coordinate
+        if not self.show_cursor or ct == "none":
+            super().action_scroll_down()
+            return
+        r, c = self.cursor_coordinate
+        if ct in ("cell", "row"):
             self.move_cursor(row=min(self.row_count - 1, r + self._JUMP), scroll=True)
+        elif ct == "column":
+            self.move_cursor(
+                row=min(self.row_count - 1, r + self._JUMP), column=c, scroll=True
+            )
         else:
             super().action_scroll_down()
 
@@ -228,7 +241,7 @@ class MyDataTable(DataTable):
             self.add_row(*row_cleaned)
 
     def update_1d(self, arr: np.ndarray) -> None:
-        """Fill one unnamed column; row labels are ``0:``, ``1:``, …"""
+        """Fill one unnamed column; row labels are ``0``, ``1``, … (no colon; text preview uses ``i:``)."""
         a = np.asarray(arr)
         self.clear(columns=True)
         self.add_columns("")
@@ -237,7 +250,7 @@ class MyDataTable(DataTable):
         for i in range(int(a.shape[0])):
             self.add_row(
                 _format_1d_value_display(a[i]),
-                label=f"{i}:",
+                label=str(i),
             )
 
     def update_2d(self, arr: np.ndarray) -> None:
@@ -325,7 +338,7 @@ MAX_TABLE_COLUMNS = 1024
 
 
 def should_use_1d_table(arr) -> bool:
-    """Use a labeled-row DataTable (index ``i:`` + value column) for plain 1D data."""
+    """Use a labeled-row DataTable (index + value column) for plain 1D data."""
     a = _as_display_1d(np.asarray(arr))
     return is_plain_1d_array(a) and a.size <= MAX_TABLE_ELEMENTS
 
@@ -495,6 +508,8 @@ class ColumnContent(VerticalScroll):
     BINDINGS = [
         Binding("down,j", "scroll_down", "Down", show=True),
         Binding("up,k", "scroll_up", "Up", show=True),
+        # Do not bind J/K here: they would scroll this VerticalScroll (the preview shell)
+        # instead of the focused DataTable's ±10 row jump. Use j/k, or app J/K when the file list is focused.
         Binding("pageup,u", "page_up", "Page up", show=False),
         Binding("pagedown,d", "page_down", "Page down", show=False),
         Binding("G", "scroll_end", "Bottom", show=False),
@@ -517,15 +532,15 @@ class ColumnContent(VerticalScroll):
             return
         lw = int(getattr(app, "_preview_line_width", _ND_LINEWIDTH_DEFAULT))
         if is_dataframe(data):
-            self.notify("Table: h/j/k/l navigate; H/J/K/L jump; y copy; esc quit")
+            self.notify("keys: h/j/k/l; H/J/K/L jump ±10; y copy; esc quit")
             self._df.update(data)
             self._df.focus()
         elif should_use_1d_table(data):
-            self.notify("keys: j/k navigate; J/K jump; y copy; esc quit")
+            self.notify("keys: j/k row; J/K jump ±10; y copy; esc quit")
             self._df.update_1d(_as_display_1d(np.asarray(data)))
             self._df.focus()
         elif should_use_2d_table(data):
-            self.notify("keys: h/j/k/l navigate; H/J/K/L jump; y copy; esc quit")
+            self.notify("keys: h/j/k/l; H/J/K/L jump ±10; y copy; esc quit")
             self._df.update_2d(np.asarray(data))
             self._df.focus()
         else:
@@ -580,6 +595,8 @@ class H5TUIApp(App):
         Binding("p", "toggle_plot", "Plot", show=True),
         Binding("P", "toggle_plot_histogram", "Histogram", show=True),
         Binding("A", "aggregate_data", "Aggregate", show=True),
+        Binding("J", "scroll_preview_down", "Scroll preview", show=False),
+        Binding("K", "scroll_preview_up", "Scroll preview", show=False),
     ]
     CSS_PATH = "h5tui.tcss"
     TITLE = "h5tui"
@@ -916,8 +933,39 @@ class H5TUIApp(App):
 
         return stats
 
+    def action_scroll_preview_down(self) -> None:
+        """Nudge preview when file lists are focused (``J`` does not steal table jump)."""
+        if (
+            self.has_class("view-dtable")
+            and self.has_class("view-dataset")
+            and not self.has_class("view-plot")
+        ):
+            self._preview._df.action_jump_down()
+        else:
+            self._preview.scroll_down()
+
+    def action_scroll_preview_up(self) -> None:
+        if (
+            self.has_class("view-dtable")
+            and self.has_class("view-dataset")
+            and not self.has_class("view-plot")
+        ):
+            self._preview._df.action_jump_up()
+        else:
+            self._preview.scroll_up()
+
     def check_action(self, action, parameters):
         if action == "aggregate_data" and not self.has_class("view-dataset"):
+            return False
+        elif action in ("scroll_preview_down", "scroll_preview_up") and isinstance(
+            self.screen, AttributeScreen
+        ):
+            # AttributeScreen uses J/K to scroll attribute text.
+            return False
+        elif action in ("scroll_preview_down", "scroll_preview_up") and (
+            self.focused is self._preview._df
+        ):
+            # DataTable owns J/K for ±10 row jump; do not run app handler.
             return False
         elif action in ["cursor_down", "cursor_up"] and self.has_class("view-dataset"):
             return False
