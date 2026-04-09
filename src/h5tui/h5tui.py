@@ -228,16 +228,16 @@ class MyDataTable(DataTable):
             self.add_row(*row_cleaned)
 
     def update_1d(self, arr: np.ndarray) -> None:
-        """Fill a ``val`` column; row index is shown as a non-interactive row label."""
+        """Fill one unnamed column; row labels are ``0:``, ``1:``, …"""
         a = np.asarray(arr)
         self.clear(columns=True)
-        self.add_columns("val")
+        self.add_columns("")
         if a.size == 0:
             return
         for i in range(int(a.shape[0])):
             self.add_row(
-                _format_table_cell(a[i]),
-                label=str(i),
+                _format_1d_value_display(a[i]),
+                label=f"{i}:",
             )
 
     def update_2d(self, arr: np.ndarray) -> None:
@@ -325,7 +325,7 @@ MAX_TABLE_COLUMNS = 1024
 
 
 def should_use_1d_table(arr) -> bool:
-    """Use a labeled-row DataTable (val column + index labels) for plain 1D data."""
+    """Use a labeled-row DataTable (index ``i:`` + value column) for plain 1D data."""
     a = _as_display_1d(np.asarray(arr))
     return is_plain_1d_array(a) and a.size <= MAX_TABLE_ELEMENTS
 
@@ -393,8 +393,31 @@ def _format_table_cell(v) -> str:
     return _format_array_element(v)
 
 
+def _format_1d_value_display(v: object) -> str:
+    """Format one scalar for 1D table/preview: space before positive signs (column alignment)."""
+    x = np.asarray(v)
+    if x.dtype.names is not None or x.dtype == np.dtype("O"):
+        return _format_array_element(v)
+    if x.size != 1:
+        return _format_array_element(v)
+    e = x.item()
+    if isinstance(e, bytes):
+        return e.decode("utf-8", errors="replace")
+    if isinstance(e, str):
+        return e
+    if np.issubdtype(x.dtype, np.bool_):
+        return str(bool(e))
+    if np.issubdtype(x.dtype, np.integer):
+        return format(int(e), " d")
+    if np.issubdtype(x.dtype, np.complexfloating):
+        return _format_array_element(v)
+    if np.issubdtype(x.dtype, np.inexact):
+        return format(float(e), " f")
+    return _format_array_element(v)
+
+
 def format_1d_with_indices(arr: np.ndarray) -> str:
-    """Format 1D data as label column + ``val`` (browse preview); respects threshold/edgeitems."""
+    """Format 1D data as ``index: value`` rows (browse preview); respects threshold/edgeitems."""
     a = np.asarray(arr)
     n = int(a.shape[0])
     threshold = _ND_THRESHOLD
@@ -404,20 +427,17 @@ def format_1d_with_indices(arr: np.ndarray) -> str:
     if n == 0:
         return ""
 
-    # Blank over the label column, header only on the value column (like DataTable).
-    header = f"{' ':>{idxw}}  val"
-
     def line(i: int) -> str:
-        return f"{i:>{idxw}}  {_format_array_element(a[i])}"
+        return f"{i:>{idxw}}: {_format_1d_value_display(a[i])}"
 
     if n <= threshold or n <= 2 * edgeitems:
-        return header + "\n" + "\n".join(line(i) for i in range(n))
+        return "\n".join(line(i) for i in range(n))
 
     omitted = n - 2 * edgeitems
     parts = [line(i) for i in range(edgeitems)]
     parts.append(f"… ({omitted} elements omitted) …")
     parts.extend(line(i) for i in range(n - edgeitems, n))
-    return header + "\n" + "\n".join(parts)
+    return "\n".join(parts)
 
 
 def format_ndarray_text(
