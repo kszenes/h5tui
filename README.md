@@ -7,7 +7,7 @@
 Its design is inspired by vim-motion-enabled terminal file managers, such as [ranger](https://github.com/ranger/ranger), [lf](https://github.com/gokcehan/lf) and [yazi](https://github.com/sxyazi/yazi).
 This choice is natural since the HDF5 file format also adopts a directory structure for storing the data.
 
-This project wouldn't have been possible without [h5py](https://github.com/h5py/h5py) for reading the HDF5 files, [textual](https://github.com/Textualize/textual) for building the UI, and [plotext](https://github.com/piccolomo/plotext) for plotting data straight in the terminal. 
+This project wouldn't have been possible without [h5py](https://github.com/h5py/h5py) for reading the HDF5 files, [textual](https://github.com/Textualize/textual) for building the UI, and [plotext](https://github.com/piccolomo/plotext) for plotting data straight in the terminal.
 
 ## Demo
 
@@ -55,18 +55,6 @@ The plotting can be toggled through the `p` keybinding while viewing a dataset.
 `h5tui` also has limited data aggregation facilities for summarizing datasets.
 This can be activated through the `A` keybinding while viewing a dataset.
 Currently, this option will compute the min, max, and mean of the dataset but further statistics may be added in the future.
-
-## Dataset Format Options
-
-The formatting of the dataset may be controlled using a couple of keybindings.
-Since HDF5 files often contain large datasets which, by default, will truncate the output if the number of elements exceeds 1000 (that is the `numpy` default).
-This behavior can be `t`oggled using the `t` keybinding to display the entire dataset.
-Note that, currently, this operation is blocking, and therefore huge datasets might take some time to load.
-In addition, the `s` key toggles the scientific notation on and off (corresponding to the `suppress` option in `numpy`s printing configuration).
-
-Formatting keybindings:
-- `t`: toggle output truncation
-- `s`: toggle scientific notation
 
 ## Special Treatment of Dataframes
 

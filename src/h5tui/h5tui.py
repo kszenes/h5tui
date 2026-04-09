@@ -224,10 +224,9 @@ class MyDataTable(DataTable):
         self.add_columns("val")
         if a.size == 0:
             return
-        suppress = bool(np.get_printoptions().get("suppress", False))
         for i in range(int(a.shape[0])):
             self.add_row(
-                _format_table_cell(a[i], suppress=suppress),
+                _format_table_cell(a[i]),
                 label=str(i),
             )
 
@@ -238,13 +237,10 @@ class MyDataTable(DataTable):
         if a.size == 0:
             return
         nrows, ncols = int(a.shape[0]), int(a.shape[1])
-        suppress = bool(np.get_printoptions().get("suppress", False))
         self.add_columns(*(str(j) for j in range(ncols)))
         for i in range(nrows):
             row = a[i]
-            cells = tuple(
-                _format_table_cell(row[j], suppress=suppress) for j in range(ncols)
-            )
+            cells = tuple(_format_table_cell(row[j]) for j in range(ncols))
             self.add_row(*cells, label=str(i))
 
 
@@ -326,28 +322,27 @@ def should_use_ndarray_datatable(arr) -> bool:
     return should_use_1d_table(arr) or should_use_2d_table(arr)
 
 
-def _format_array_element(v, *, suppress: bool) -> str:
+def _format_array_element(v) -> str:
     x = np.asarray(v)
     return np.array2string(
         x,
         max_line_width=10_000,
-        suppress_small=suppress,
+        suppress_small=False,
         separator=", ",
     )
 
 
-def _format_table_cell(v, *, suppress: bool) -> str:
+def _format_table_cell(v) -> str:
     """Single-cell text for DataTable rows.
 
     Integers and bools use a fast path. Real/complex scalars go through
-    ``array2string`` so ``suppress`` (``suppress_small``) and other print
-    options match NumPy text output.
+    ``array2string`` for consistent NumPy-style text output.
     """
     x = np.asarray(v)
     if x.dtype.names is not None or x.dtype == np.dtype("O"):
-        return _format_array_element(v, suppress=suppress)
+        return _format_array_element(v)
     if x.size != 1:
-        return _format_array_element(v, suppress=suppress)
+        return _format_array_element(v)
     e = x.item()
     if isinstance(e, bytes):
         return e.decode("utf-8", errors="replace")
@@ -358,8 +353,8 @@ def _format_table_cell(v, *, suppress: bool) -> str:
     if np.issubdtype(x.dtype, np.integer):
         return str(int(e))
     if np.issubdtype(x.dtype, np.inexact):
-        return _format_array_element(v, suppress=suppress)
-    return _format_array_element(v, suppress=suppress)
+        return _format_array_element(v)
+    return _format_array_element(v)
 
 
 def format_1d_with_indices(arr: np.ndarray) -> str:
@@ -369,7 +364,6 @@ def format_1d_with_indices(arr: np.ndarray) -> str:
     opts = np.get_printoptions()
     threshold = int(opts.get("threshold", 1000))
     edgeitems = int(opts.get("edgeitems", 3))
-    suppress = bool(opts.get("suppress", False))
     idxw = max(1, len(str(max(0, n - 1))))
 
     if n == 0:
@@ -379,7 +373,7 @@ def format_1d_with_indices(arr: np.ndarray) -> str:
     header = f"{' ':>{idxw}}  val"
 
     def line(i: int) -> str:
-        return f"{i:>{idxw}}  {_format_array_element(a[i], suppress=suppress)}"
+        return f"{i:>{idxw}}  {_format_array_element(a[i])}"
 
     if n <= threshold or n <= 2 * edgeitems:
         return header + "\n" + "\n".join(line(i) for i in range(n))
@@ -402,7 +396,7 @@ def format_ndarray_text(arr: np.ndarray) -> str:
         max_line_width=int(opts.get("linewidth", 75)),
         threshold=int(opts.get("threshold", 1000)),
         edgeitems=int(opts.get("edgeitems", 3)),
-        suppress_small=bool(opts.get("suppress", False)),
+        suppress_small=False,
     )
 
 
@@ -463,7 +457,7 @@ class ColumnContent(VerticalScroll):
         self._value = value
 
     def reprint(self):
-        """Used to reprint if the numpy formatting is modified"""
+        """Refresh dataset text or table content for the current value."""
         if is_dataframe(self._value):
             self.notify("Table: h/j/k/l navigate; H/J/K/L jump; y copy; esc quit")
             self._df.update(self._value)
@@ -519,7 +513,6 @@ class H5TUIApp(App):
         Binding("left,h", "goto_parent", "Back", show=True),
         Binding("right,l", "goto_child", "Select", show=True),
         Binding("a", "view_attrs", "Attributes", show=True),
-        Binding("s", "suppress_print", "Suppress", show=True),
         Binding("p", "toggle_plot", "Plot", show=True),
         Binding("A", "aggregate_data", "Aggregate", show=True),
     ]
@@ -536,7 +529,6 @@ class H5TUIApp(App):
 
         self._prev_highlighted = 0
 
-        self._suppress_print = False
         np.set_printoptions(linewidth=self.size.width)
 
         self.is_aggregated = False
@@ -701,7 +693,7 @@ class H5TUIApp(App):
         self.remove_class("view-plot")
         self.remove_class("view-dtable")
         self.remove_class("preview-maximized")
-        np.set_printoptions(suppress=False, threshold=1000)
+        np.set_printoptions(threshold=1000)
 
     def refresh_preview(self) -> None:
         """Update the preview pane from the Current column selection (browse mode)."""
@@ -811,7 +803,6 @@ class H5TUIApp(App):
         if (
             action
             in [
-                "suppress_print",
                 "toggle_plot",
                 "aggregate_data",
             ]
@@ -925,18 +916,6 @@ class H5TUIApp(App):
                 else:
                     self.update_content(path)
         self.refresh_bindings()
-
-    def action_suppress_print(self):
-        """Change numpy printing by suppression"""
-        if self.has_class("view-dataset") and not self.has_class("view-plot"):
-            self._suppress_print = not self._suppress_print
-            if self._suppress_print:
-                np.set_printoptions(suppress=True)
-                self.notify("Suppression: ON", timeout=2)
-            else:
-                np.set_printoptions(suppress=False)
-                self.notify("Suppression: OFF", timeout=1)
-            self._preview.reprint()
 
     def action_toggle_plot(self):
         if self.has_class("view-dataset"):
