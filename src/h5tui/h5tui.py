@@ -44,13 +44,13 @@ def h5_parent_path(path: str) -> str | None:
 class AttributeScreen(ModalScreen):
     BINDINGS = [
         Binding(
-            "left,h,escape",
+            "left,h,escape,q",
             "quit_attrs",
             "Close",
             show=True,
             priority=True,
         ),
-        Binding("q", "quit_application", "Quit app", show=True, priority=True),
+        Binding("Q", "quit_application", "Quit app", show=True, priority=True),
         Binding("down,j", "cursor_down", "Down", show=True, priority=True),
         Binding("up,k", "cursor_up", "Up", show=True, priority=True),
         Binding("J", "scroll_content_down", "Scroll Down", priority=True),
@@ -523,7 +523,8 @@ class H5TUIApp(App):
 
     BINDINGS = [
         Binding("i", "toggle_dark", "Toggle dark mode", show=False),
-        Binding("q", "quit", "Quit", show=False),
+        Binding("q", "quit_contextual", "Close", show=False),
+        Binding("Q", "quit_application", "Quit", show=False),
         Binding("escape", "exit_dataset_view", "Close", show=False),
         Binding("left,h", "goto_parent", "Back", show=True),
         Binding("right,l", "goto_child", "Select", show=True),
@@ -873,6 +874,25 @@ class H5TUIApp(App):
             return
         if self.has_class("view-dataset"):
             self.action_goto_parent()
+
+    def action_quit_application(self) -> None:
+        """Always exit the app (bound to ``Q``)."""
+        self.exit()
+
+    def action_quit_contextual(self) -> None:
+        """``q``: leave plot or dataset view if open; otherwise quit (file browser only)."""
+        if self.has_class("view-plot"):
+            self.remove_class("view-plot")
+            if self.has_class("view-dtable"):
+                self._preview._df.focus()
+            else:
+                self._preview.focus()
+            self.refresh_bindings()
+            return
+        if self.has_class("view-dataset"):
+            self.action_exit_dataset_view()
+            return
+        self.exit()
 
     def action_view_attrs(self) -> None:
         """Open a modal listing attributes for the selected group or dataset."""
