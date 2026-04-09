@@ -29,8 +29,8 @@ class AttributeScreen(ModalScreen):
         Binding("up,k", "cursor_up", "Up", show=True, priority=True),
         Binding("J", "scroll_content_down", "Scroll Down", priority=True),
         Binding("K", "scroll_content_up", "Scroll Up", priority=True),
-        Binding("u", "scroll_content_page_up", "Scroll Down", priority=True),
-        Binding("d", "scroll_content_page_down", "Scroll Up", priority=True),
+        Binding("u", "scroll_content_page_up", "Page Up", priority=True),
+        Binding("d", "scroll_content_page_down", "Page Down", priority=True),
     ]
 
     def __init__(self, h5file, cur_dir, itemname, id=None) -> None:
@@ -61,7 +61,6 @@ class AttributeScreen(ModalScreen):
 
     def update_content(self):
         content = str(self._item.attrs[self._cur_attr])
-        print(f"{content = }")
         self._content_widget.update(content)
 
     def action_quit_attrs(self):
@@ -295,6 +294,9 @@ class H5TUIApp(App):
 
         self.is_aggregated = False
 
+    def on_unmount(self) -> None:
+        self._file.close()
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield Footer()
@@ -319,15 +321,22 @@ class H5TUIApp(App):
             if isinstance(h5elem, h5py.Dataset):
                 return "(DataSet)  "
 
+    def get_selected_itemname(self):
+        """Return the HDF5 child name for the highlighted row, or None."""
+        highlighted = self._column1._selector_widget.highlighted
+        if highlighted is None:
+            return None
+        items = self.get_dir_content(self._cur_dir)
+        if highlighted < 0 or highlighted >= len(items):
+            return None
+        return items[highlighted]
+
     def has_attr(self):
         """Return if the currently selected item has attributes"""
-        highlighted = self._column1._selector_widget.highlighted
-        if highlighted is not None:
-            prompt = self._column1._selector_widget.get_option_at_index(
-                highlighted
-            ).prompt
-            selected_item = self.get_itemname_from_prompt(prompt)
-            return self.build_attr_str(selected_item) != ""
+        selected_item = self.get_selected_itemname()
+        if selected_item is None:
+            return False
+        return self.build_attr_str(selected_item) != ""
 
     def build_attr_str(self, elem):
         """Creates the has attributes string (▼ + num attrs)"""
@@ -346,13 +355,6 @@ class H5TUIApp(App):
             for with_type, item in zip(with_type_icon, items)
         ]
         return with_attrs
-
-    def get_itemname_from_prompt(self, prompt):
-        """
-        Returns the item name from the selected item
-        The selected item contains an icon for group or dset, itemname and the number of attributes
-        """
-        return prompt.split()[1]
 
     def get_dir_content(self, dir):
         """Return contents of current path"""
@@ -415,13 +417,9 @@ class H5TUIApp(App):
             return True
 
     def action_view_attrs(self) -> None:
-        """Action to display the quit dialog."""
-        highlighted = self._column1._selector_widget.highlighted
-        if highlighted is not None:
-            prompt = self._column1._selector_widget.get_option_at_index(
-                highlighted
-            ).prompt
-            selected_item = self.get_itemname_from_prompt(prompt)
+        """Open a modal listing attributes for the selected group or dataset."""
+        selected_item = self.get_selected_itemname()
+        if selected_item is not None:
             if self.build_attr_str(selected_item) != "":
                 self.push_screen(
                     AttributeScreen(self._file, self._cur_dir, selected_item)
@@ -488,13 +486,10 @@ class H5TUIApp(App):
         ):
             # Does not do anything if data is already being viewed
             return
-        highlighted = self._column1._selector_widget.highlighted
-        if highlighted is not None:
-            prompt = self._column1._selector_widget.get_option_at_index(
-                highlighted
-            ).prompt
-            selected_item = self.get_itemname_from_prompt(prompt)
+        selected_item = self.get_selected_itemname()
+        if selected_item is not None:
             path = os.path.join(self._cur_dir, selected_item)
+            highlighted = self._column1._selector_widget.highlighted
 
             if path in self._file:
                 if isinstance(self._file[path], h5py.Group):
@@ -551,8 +546,13 @@ def check_file_validity(fname):
         print("Usage: h5tui {file}.h5")
         return False
 
+    if not os.path.isfile(fname):
+        print(f"Provided argument '{fname}' is not an existing file.")
+        print("Usage: h5tui {file}.h5")
+        return False
+
     if not h5py.is_hdf5(fname):
-        print(f"Provide argument '{fname}' is not a valid HDF5 file.")
+        print(f"Provided argument '{fname}' is not a valid HDF5 file.")
         print("Usage: h5tui {file}.h5")
         return False
 
