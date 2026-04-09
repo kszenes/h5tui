@@ -84,16 +84,7 @@ OptionList {
   display: none;
 }
 
-.view-plot #data {
-  display: none;
-}
-.view-plot #plot {
-  display: block;
-}
-.view-plot #dtable {
-  display: none;
-}
-
+/* Table vs text: dtable replaces #data when view-dtable is set. */
 .view-dtable #data {
   display: none;
 }
@@ -102,6 +93,17 @@ OptionList {
 }
 .view-dtable #dtable {
   display: block;
+}
+
+/* Plot must come after .view-dtable so p toggles plot even when the dataset uses a DataTable. */
+.view-plot #data {
+  display: none;
+}
+.view-plot #plot {
+  display: block;
+}
+.view-plot #dtable {
+  display: none;
 }
 
 /* Path line: bold, no box */

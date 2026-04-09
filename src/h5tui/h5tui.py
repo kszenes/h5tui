@@ -5,6 +5,7 @@ from textual.containers import VerticalScroll, Horizontal, Vertical
 from textual.binding import Binding
 from textual.screen import ModalScreen
 from textual_plotext import PlotextPlot
+from rich.text import Text
 
 import h5py
 import numpy as np
@@ -111,21 +112,101 @@ class AttributeScreen(ModalScreen):
         self._vertical_widget.scroll_page_up()
 
 
+def _cell_value_to_str(value: object) -> str:
+    """Plain string for DataTable cell contents (clipboard / display)."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, Text):
+        return value.plain
+    return str(value)
+
+
 class MyDataTable(DataTable):
+    """Jump distance for H/J/K/L (capital) — move cursor by this many rows/columns."""
+
+    _JUMP = 10
+
     BINDINGS = [
         Binding("enter", "select_cursor", "Select", show=False),
         Binding("up,k", "cursor_up", "Cursor up", show=False),
         Binding("down,j", "cursor_down", "Cursor down", show=False),
-        Binding("right,L", "cursor_right", "Cursor right", show=False),
-        Binding("left,H", "cursor_left", "Cursor left", show=False),
+        # Lowercase h/l for columns; priority so app goto_parent/goto_child does not steal keys.
+        Binding("h", "cursor_left", "Left", show=False, priority=True),
+        Binding("l", "cursor_right", "Right", show=False, priority=True),
+        Binding("left", "cursor_left", "Cursor left", show=False),
+        Binding("right", "cursor_right", "Cursor right", show=False),
+        Binding("H", "jump_left", show=False, priority=True),
+        Binding("J", "jump_down", show=False, priority=True),
+        Binding("K", "jump_up", show=False, priority=True),
+        Binding("L", "jump_right", show=False, priority=True),
         Binding("pageup,u", "page_up", "Page up", show=False),
         Binding("pagedown,d", "page_down", "Page down", show=False),
         Binding("g", "scroll_top", "Top", show=False),
         Binding("G", "scroll_bottom", "Bottom", show=False),
+        Binding("y", "copy_cell", "Copy", show=True),
     ]
 
     def __init__(self, id):
         super().__init__(id=id)
+
+    def action_jump_up(self) -> None:
+        self._set_hover_cursor(False)
+        if self.row_count == 0 or not self.columns:
+            return
+        ct = self.cursor_type
+        if self.show_cursor and ct in ("cell", "row"):
+            r, _ = self.cursor_coordinate
+            self.move_cursor(row=max(0, r - self._JUMP), scroll=True)
+        else:
+            super().action_scroll_up()
+
+    def action_jump_down(self) -> None:
+        self._set_hover_cursor(False)
+        if self.row_count == 0 or not self.columns:
+            return
+        ct = self.cursor_type
+        if self.show_cursor and ct in ("cell", "row"):
+            r, _ = self.cursor_coordinate
+            self.move_cursor(row=min(self.row_count - 1, r + self._JUMP), scroll=True)
+        else:
+            super().action_scroll_down()
+
+    def action_jump_left(self) -> None:
+        self._set_hover_cursor(False)
+        if self.row_count == 0 or not self.columns:
+            return
+        ct = self.cursor_type
+        if self.show_cursor and ct in ("cell", "column"):
+            _, c = self.cursor_coordinate
+            self.move_cursor(column=max(0, c - self._JUMP), scroll=True)
+        else:
+            super().action_scroll_left()
+
+    def action_jump_right(self) -> None:
+        self._set_hover_cursor(False)
+        if self.row_count == 0 or not self.columns:
+            return
+        ct = self.cursor_type
+        if self.show_cursor and ct in ("cell", "column"):
+            _, c = self.cursor_coordinate
+            self.move_cursor(
+                column=min(len(self.columns) - 1, c + self._JUMP), scroll=True
+            )
+        else:
+            super().action_scroll_right()
+
+    def action_copy_cell(self) -> None:
+        """Copy the focused cell value to the app clipboard."""
+        if self.row_count == 0:
+            return
+        try:
+            value = self.get_cell_at(self.cursor_coordinate)
+        except Exception:
+            return
+        self.app.copy_to_clipboard(_cell_value_to_str(value))
+        self.app.notify("Copied to clipboard", timeout=1.5)
 
     def update(self, value):
         self.clear(columns=True)
@@ -135,6 +216,36 @@ class MyDataTable(DataTable):
                 e.decode("utf8") if isinstance(e, bytes) else e for e in row.item()
             ]
             self.add_row(*row_cleaned)
+
+    def update_1d(self, arr: np.ndarray) -> None:
+        """Fill a ``val`` column; row index is shown as a non-interactive row label."""
+        a = np.asarray(arr)
+        self.clear(columns=True)
+        self.add_columns("val")
+        if a.size == 0:
+            return
+        suppress = bool(np.get_printoptions().get("suppress", False))
+        for i in range(int(a.shape[0])):
+            self.add_row(
+                _format_table_cell(a[i], suppress=suppress),
+                label=str(i),
+            )
+
+    def update_2d(self, arr: np.ndarray) -> None:
+        """Fill one column per matrix column; row index is a non-interactive label."""
+        a = np.asarray(arr)
+        self.clear(columns=True)
+        if a.size == 0:
+            return
+        nrows, ncols = int(a.shape[0]), int(a.shape[1])
+        suppress = bool(np.get_printoptions().get("suppress", False))
+        self.add_columns(*(str(j) for j in range(ncols)))
+        for i in range(nrows):
+            row = a[i]
+            cells = tuple(
+                _format_table_cell(row[j], suppress=suppress) for j in range(ncols)
+            )
+            self.add_row(*cells, label=str(i))
 
 
 def get_colnames(obj):
@@ -158,6 +269,140 @@ def is_aggregatable(obj):
         isinstance(obj, np.ndarray)
         and np.issubdtype(obj.dtype, np.number)
         and obj.size > 1
+    )
+
+
+def _as_display_1d(arr: np.ndarray) -> np.ndarray:
+    """Treat (N,1) / (1,N) numeric columns as 1D for text display."""
+    a = np.asarray(arr)
+    if a.ndim == 2 and a.size and min(a.shape) == 1 and a.dtype.fields is None:
+        return a.ravel()
+    return a
+
+
+def is_plain_1d_array(arr: np.ndarray) -> bool:
+    """Non-record 1D arrays we show as one line per index (exclude object arrays)."""
+    if not isinstance(arr, np.ndarray) or arr.ndim != 1:
+        return False
+    return arr.dtype.fields is None and arr.dtype != np.dtype("O")
+
+
+# Plain ndarray DataTable limits (text fallback beyond these).
+MAX_TABLE_ELEMENTS = 200_000
+MAX_TABLE_COLUMNS = 1024
+
+
+def should_use_1d_table(arr) -> bool:
+    """Use a labeled-row DataTable (val column + index labels) for plain 1D data."""
+    a = _as_display_1d(np.asarray(arr))
+    return is_plain_1d_array(a) and a.size <= MAX_TABLE_ELEMENTS
+
+
+def is_plain_2d_array(arr: np.ndarray) -> bool:
+    """Non-record 2D arrays (exclude object dtype)."""
+    if not isinstance(arr, np.ndarray) or arr.ndim != 2:
+        return False
+    return arr.dtype.fields is None and arr.dtype != np.dtype("O")
+
+
+def should_use_2d_table(arr) -> bool:
+    """2D plain array as a grid: column headers 0..n-1, row labels 0..m-1."""
+    a = np.asarray(arr)
+    if not is_plain_2d_array(a) or a.size > MAX_TABLE_ELEMENTS:
+        return False
+    if min(a.shape) == 0:
+        return False
+    # Vectors (N,1)/(1,N) use the 1D table after _as_display_1d in should_use_1d_table.
+    if min(a.shape) == 1:
+        return False
+    ncols = int(a.shape[1])
+    if ncols > MAX_TABLE_COLUMNS:
+        return False
+    return True
+
+
+def should_use_ndarray_datatable(arr) -> bool:
+    """Recarray uses ``update``; plain 1D/2D use ``update_1d`` / ``update_2d``."""
+    return should_use_1d_table(arr) or should_use_2d_table(arr)
+
+
+def _format_array_element(v, *, suppress: bool) -> str:
+    x = np.asarray(v)
+    return np.array2string(
+        x,
+        max_line_width=10_000,
+        suppress_small=suppress,
+        separator=", ",
+    )
+
+
+def _format_table_cell(v, *, suppress: bool) -> str:
+    """Single-cell text for DataTable rows.
+
+    Integers and bools use a fast path. Real/complex scalars go through
+    ``array2string`` so ``suppress`` (``suppress_small``) and other print
+    options match NumPy text output.
+    """
+    x = np.asarray(v)
+    if x.dtype.names is not None or x.dtype == np.dtype("O"):
+        return _format_array_element(v, suppress=suppress)
+    if x.size != 1:
+        return _format_array_element(v, suppress=suppress)
+    e = x.item()
+    if isinstance(e, bytes):
+        return e.decode("utf-8", errors="replace")
+    if isinstance(e, str):
+        return e
+    if np.issubdtype(x.dtype, np.bool):
+        return str(bool(e))
+    if np.issubdtype(x.dtype, np.integer):
+        return str(int(e))
+    if np.issubdtype(x.dtype, np.inexact):
+        return _format_array_element(v, suppress=suppress)
+    return _format_array_element(v, suppress=suppress)
+
+
+def format_1d_with_indices(arr: np.ndarray) -> str:
+    """Format 1D data as label column + ``val`` (browse preview); respects threshold/edgeitems."""
+    a = np.asarray(arr)
+    n = int(a.shape[0])
+    opts = np.get_printoptions()
+    threshold = int(opts.get("threshold", 1000))
+    edgeitems = int(opts.get("edgeitems", 3))
+    suppress = bool(opts.get("suppress", False))
+    idxw = max(1, len(str(max(0, n - 1))))
+
+    if n == 0:
+        return ""
+
+    # Blank over the label column, header only on the value column (like DataTable).
+    header = f"{' ':>{idxw}}  val"
+
+    def line(i: int) -> str:
+        return f"{i:>{idxw}}  {_format_array_element(a[i], suppress=suppress)}"
+
+    if n <= threshold or n <= 2 * edgeitems:
+        return header + "\n" + "\n".join(line(i) for i in range(n))
+
+    omitted = n - 2 * edgeitems
+    parts = [line(i) for i in range(edgeitems)]
+    parts.append(f"… ({omitted} elements omitted) …")
+    parts.extend(line(i) for i in range(n - edgeitems, n))
+    return header + "\n" + "\n".join(parts)
+
+
+def format_ndarray_text(arr: np.ndarray) -> str:
+    """Human-readable ndarray text; 1D uses indexed rows, other shapes use array2string."""
+    a = _as_display_1d(np.asarray(arr))
+    if is_plain_1d_array(a):
+        return format_1d_with_indices(a)
+    opts = np.get_printoptions()
+    return np.array2string(
+        a,
+        max_line_width=int(opts.get("linewidth", 75)),
+        threshold=int(opts.get("threshold", 1000)),
+        edgeitems=int(opts.get("edgeitems", 3)),
+        suppress_small=bool(opts.get("suppress", False)),
     )
 
 
@@ -215,18 +460,24 @@ class ColumnContent(VerticalScroll):
         yield self._df
 
     def update_value(self, value):
-        # save value to be able to reference it in toggle truncate
         self._value = value
 
     def reprint(self):
         """Used to reprint if the numpy formatting is modified"""
         if is_dataframe(self._value):
-            self.notify("Entering data table: use capital H and L to navigate columns")
+            self.notify("Table: h/j/k/l navigate; H/J/K/L jump; y copy; esc quit")
             self._df.update(self._value)
             self._df.focus()
-
+        elif should_use_1d_table(self._value):
+            self.notify("keys: j/k navigate; J/K jump; y copy; esc quit")
+            self._df.update_1d(_as_display_1d(np.asarray(self._value)))
+            self._df.focus()
+        elif should_use_2d_table(self._value):
+            self.notify("keys: h/j/k/l navigate; H/J/K/L jump; y copy; esc quit")
+            self._df.update_2d(np.asarray(self._value))
+            self._df.focus()
         else:
-            self._content.update(f"{self._value}")
+            self._content.update(format_ndarray_text(np.asarray(self._value)))
 
     def replot(self):
         """Plot data, currently only supports 1D and 2D data"""
@@ -264,10 +515,10 @@ class H5TUIApp(App):
     BINDINGS = [
         Binding("i", "toggle_dark", "Toggle dark mode", show=False),
         Binding("q", "quit", "Quit", show=False),
+        Binding("escape", "exit_dataset_view", "Close", show=False),
         Binding("left,h", "goto_parent", "Back", show=True),
-        Binding("right,l", "goto_child", "Select", show=True, priority=True),
+        Binding("right,l", "goto_child", "Select", show=True),
         Binding("a", "view_attrs", "Attributes", show=True),
-        Binding("t", "truncate_print", "Truncate", show=True),
         Binding("s", "suppress_print", "Suppress", show=True),
         Binding("p", "toggle_plot", "Plot", show=True),
         Binding("A", "aggregate_data", "Aggregate", show=True),
@@ -285,7 +536,6 @@ class H5TUIApp(App):
 
         self._prev_highlighted = 0
 
-        self._truncate_print = True
         self._suppress_print = False
         np.set_printoptions(linewidth=self.size.width)
 
@@ -426,11 +676,11 @@ class H5TUIApp(App):
             return "\n".join(lines)
         if dset.size <= 128:
             arr = np.asarray(dset[...])
-            lines.append(np.array2string(arr, threshold=100, edgeitems=3))
+            lines.append(format_ndarray_text(arr))
             return "\n".join(lines)
         if dset.ndim == 1:
             n = min(24, dset.shape[0])
-            lines.append(np.array2string(np.asarray(dset[:n]), threshold=n + 1))
+            lines.append(format_ndarray_text(np.asarray(dset[:n])))
             lines.append("… (press l for full view)")
         elif dset.ndim == 2:
             r = min(6, dset.shape[0])
@@ -526,6 +776,8 @@ class H5TUIApp(App):
             dset_dtype = [str(field[0]) for field in dset.dtype.fields.values()]
         else:
             dset_dtype = dset.dtype
+            if should_use_ndarray_datatable(self._data):
+                self.add_class("view-dtable")
 
         self._preview.update_value(self._data)
         self._preview.reprint()
@@ -534,7 +786,12 @@ class H5TUIApp(App):
             f"Path: {self._cur_dir}\nDataset: {dset_name} <{dset_dtype}> {dset_shape}"
         )
         self.update_header(self._dataset_detail_header)
-        self._preview.focus()
+        # Focus DataTable when it is the active view; focusing the parent ColumnContent
+        # would steal focus from the table (requires mouse click to use j/k on rows).
+        if self.has_class("view-dtable"):
+            self._preview._df.focus()
+        else:
+            self._preview.focus()
 
     def update_header(self, string):
         self._header_widget.update(string)
@@ -554,7 +811,6 @@ class H5TUIApp(App):
         if (
             action
             in [
-                "truncate_print",
                 "suppress_print",
                 "toggle_plot",
                 "aggregate_data",
@@ -563,10 +819,23 @@ class H5TUIApp(App):
             return False
         elif action in ["cursor_down", "cursor_up"] and self.has_class("view-dataset"):
             return False
+        elif (
+            action in ("goto_parent", "goto_child")
+            and self.focused is self._preview._df
+        ):
+            # Let MyDataTable handle h / l for column moves instead of app navigation.
+            return False
         elif action == "view_attrs" and not self.has_attr():
             return None
         else:
             return True
+
+    def action_exit_dataset_view(self) -> None:
+        """Leave full dataset / table / plot view and return focus to the file columns."""
+        if isinstance(self.screen, AttributeScreen):
+            return
+        if self.has_class("view-dataset"):
+            self.action_goto_parent()
 
     def action_view_attrs(self) -> None:
         """Open a modal listing attributes for the selected group or dataset."""
@@ -632,7 +901,10 @@ class H5TUIApp(App):
             # Hide Parent + Current columns so the dataset view uses the full width.
             self.toggle_class("preview-maximized")
             if self.has_class("preview-maximized"):
-                self._preview.focus()
+                if self.has_class("view-dtable"):
+                    self._preview._df.focus()
+                else:
+                    self._preview.focus()
             else:
                 self._current_list.focus()
             self.refresh_bindings()
@@ -654,19 +926,6 @@ class H5TUIApp(App):
                     self.update_content(path)
         self.refresh_bindings()
 
-    def action_truncate_print(self):
-        """Change numpy printing by toggling truncation"""
-        if self.has_class("view-dataset") and not self.has_class("view-plot"):
-            self._truncate_print = not self._truncate_print
-            if self._truncate_print:
-                default_numpy_truncate = 1000
-                np.set_printoptions(threshold=default_numpy_truncate)
-                self.notify("Truncation: ON", timeout=2)
-            else:
-                np.set_printoptions(threshold=sys.maxsize)
-                self.notify("Truncation: OFF", timeout=2)
-            self._preview.reprint()
-
     def action_suppress_print(self):
         """Change numpy printing by suppression"""
         if self.has_class("view-dataset") and not self.has_class("view-plot"):
@@ -686,6 +945,11 @@ class H5TUIApp(App):
                     self.notify("Plotting...", timeout=2)
                 self.toggle_class("view-plot")
                 self._preview.replot()
+                if not self.has_class("view-plot"):
+                    if self.has_class("view-dtable"):
+                        self._preview._df.focus()
+                    else:
+                        self._preview.focus()
             else:
                 self.notify(
                     "Currently only 1D and 2D data is plotable", severity="warning"
