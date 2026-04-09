@@ -44,12 +44,13 @@ def h5_parent_path(path: str) -> str | None:
 class AttributeScreen(ModalScreen):
     BINDINGS = [
         Binding(
-            "left,h,q",
+            "left,h,escape",
             "quit_attrs",
-            "Return",
+            "Close",
             show=True,
             priority=True,
         ),
+        Binding("q", "quit_application", "Quit app", show=True, priority=True),
         Binding("down,j", "cursor_down", "Down", show=True, priority=True),
         Binding("up,k", "cursor_up", "Up", show=True, priority=True),
         Binding("J", "scroll_content_down", "Scroll Down", priority=True),
@@ -90,6 +91,9 @@ class AttributeScreen(ModalScreen):
 
     def action_quit_attrs(self):
         self.app.pop_screen()
+
+    def action_quit_application(self) -> None:
+        self.app.exit()
 
     def action_cursor_down(self):
         self._selector_widget.action_cursor_down()
