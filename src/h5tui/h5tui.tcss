@@ -52,6 +52,12 @@ OptionList {
   padding: 0 1;
 }
 
+/* Empty HDF5 group: horizontal center, top-aligned vertically */
+#content.empty-group-preview #data {
+  height: 1fr;
+  content-align: center top;
+}
+
 /* Full-width dataset / plot / table */
 .preview-maximized #dirs-parent,
 .preview-maximized #dirs-current {

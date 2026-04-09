@@ -699,6 +699,7 @@ class H5TUIApp(App):
         """Update the preview pane from the Current column selection (browse mode)."""
         if self.has_class("view-dataset"):
             return
+        self._preview.remove_class("empty-group-preview")
         name = self.get_selected_itemname()
         if name is None:
             self._preview._content.update("(empty directory)")
@@ -708,7 +709,8 @@ class H5TUIApp(App):
         if isinstance(node, h5py.Group):
             keys = list(node.keys())
             if not keys:
-                text = "(empty group)"
+                self._preview.add_class("empty-group-preview")
+                self._preview._content.update("\nNo Content")
             else:
                 shown = keys[:80]
                 more = len(keys) - len(shown)
@@ -716,7 +718,7 @@ class H5TUIApp(App):
                 text = "\n".join(lines)
                 if more > 0:
                     text += f"\n… ({more} more)"
-            self._preview._content.update(text)
+                self._preview._content.update(text)
         elif isinstance(node, h5py.Dataset):
             self._preview._content.update(self._dataset_preview_block(node))
 
@@ -754,6 +756,7 @@ class H5TUIApp(App):
             self.refresh_preview()
 
     def update_content(self, path):
+        self._preview.remove_class("empty-group-preview")
         dset = self._file[path]
         dset_name = os.path.basename(path)
         dset_shape = dset.shape
