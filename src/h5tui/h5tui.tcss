@@ -216,9 +216,15 @@ SavePlotScreen {
   align: center middle;
 }
 
-/* VerticalGroup + HorizontalGroup: shrink-wrap (default Vertical/Horizontal are 1fr tall). */
+/* Shell fills modal (``SavePlotScreen #save-plot-dialog`` height); inner scrolls when needed. */
 #save-plot-dialog {
   align: left top;
+  layout: vertical;
+}
+
+SavePlotScreen #save_plot_scroll {
+  height: 1fr;
+  min-height: 5;
 }
 
 #save-plot-dialog.mode-lineplot .hist-opts {

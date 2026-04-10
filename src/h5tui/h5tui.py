@@ -465,32 +465,36 @@ class SavePlotScreen(ModalScreen):
         self._default_filename = f"{safe}.pdf"
 
     def compose(self) -> ComposeResult:
-        with VerticalGroup(id="save-plot-dialog", classes="mode-lineplot"):
-            yield Static(f"Save plot · {self._dset_name}", id="save_plot_title")
-            yield Select(
-                (
-                    ("Line plot", "lineplot"),
-                    ("Histogram", "histogram"),
-                ),
-                id="plot_save_mode",
-                value="lineplot",
-                allow_blank=False,
-            )
-            with HorizontalGroup(classes="hist-opts"):
-                yield Label("Bins:")
-                yield Input(
-                    value=str(self._default_bins),
-                    id="save_bins",
-                    placeholder="Bins",
-                    type="integer",
-                )
-            with HorizontalGroup(classes="line-opts"):
-                yield Checkbox("Lines", value=True, id="line_lines")
-                yield Checkbox("Points", value=False, id="line_points")
-                yield Checkbox("Smooth (cubic spline)", value=False, id="line_smooth")
-            yield Label("Filename", id="save_filename_label")
-            yield Input(value=self._default_filename, id="save_filename")
-            yield Button("Save", variant="primary", id="save_plot_btn")
+        with Vertical(id="save-plot-dialog", classes="mode-lineplot"):
+            with VerticalScroll(id="save_plot_scroll"):
+                with VerticalGroup():
+                    yield Static(f"Save plot · {self._dset_name}", id="save_plot_title")
+                    yield Select(
+                        (
+                            ("Line plot", "lineplot"),
+                            ("Histogram", "histogram"),
+                        ),
+                        id="plot_save_mode",
+                        value="lineplot",
+                        allow_blank=False,
+                    )
+                    with HorizontalGroup(classes="hist-opts"):
+                        yield Label("Bins:")
+                        yield Input(
+                            value=str(self._default_bins),
+                            id="save_bins",
+                            placeholder="Bins",
+                            type="integer",
+                        )
+                    with HorizontalGroup(classes="line-opts"):
+                        yield Checkbox("Lines", value=True, id="line_lines")
+                        yield Checkbox("Points", value=False, id="line_points")
+                        yield Checkbox(
+                            "Smooth (cubic spline)", value=False, id="line_smooth"
+                        )
+                    yield Label("Filename", id="save_filename_label")
+                    yield Input(value=self._default_filename, id="save_filename")
+                    yield Button("Save", variant="primary", id="save_plot_btn")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -513,7 +517,7 @@ class SavePlotScreen(ModalScreen):
         return self._mode_str(sel.value)
 
     def _set_mode_class(self, mode: str | None = None) -> None:
-        dlg = self.query_one("#save-plot-dialog", VerticalGroup)
+        dlg = self.query_one("#save-plot-dialog", Vertical)
         if mode is None:
             mode = self._mode()
         dlg.set_classes(f"mode-{mode}")
