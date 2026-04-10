@@ -131,8 +131,22 @@ Toast {
 }
 
 AttributeScreen,
-DatasetSummaryScreen {
+DatasetSummaryScreen,
+JumpToLineScreen {
   align: center middle;
+}
+
+JumpToLineScreen #jump-line-dialog {
+  width: 44%;
+  max-width: 52;
+  min-width: 32;
+  height: auto;
+  border: thick $foreground 38%;
+  border-title-align: center;
+  border-title-style: bold;
+  border-title-color: $foreground 78%;
+  background: $surface;
+  padding: 1 2;
 }
 
 /* Modal shells: identical outer size for attributes, summary, and save-plot. */

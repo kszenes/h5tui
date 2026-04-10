@@ -691,6 +691,54 @@ class DatasetSummaryScreen(ModalScreen):
         self._summary_scroll().scroll_page_up()
 
 
+class JumpToLineScreen(ModalScreen):
+    """Enter a row index (0-based, matching table row labels) for plain 1D/2D tables."""
+
+    BINDINGS = [
+        Binding("escape,q", "close_jump", "Close", show=True, priority=True),
+        Binding("Q", "quit_application", "Quit app", show=False, priority=True),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="jump-line-dialog"):
+            yield Input(
+                placeholder="Row index (0-based)",
+                type="integer",
+                id="jump_line_input",
+            )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        dlg = self.query_one("#jump-line-dialog", Vertical)
+        dlg.border_title = "Jump to line"
+        self.query_one("#jump_line_input", Input).focus()
+
+    def action_close_jump(self) -> None:
+        self.app.pop_screen()
+
+    def action_quit_application(self) -> None:
+        self.app.exit()
+
+    @on(Input.Submitted, "#jump_line_input")
+    def _on_submitted(self, event: Input.Submitted) -> None:
+        raw = event.value.strip()
+        if not raw:
+            self.app.pop_screen()
+            return
+        try:
+            idx = int(raw)
+        except ValueError:
+            self.app.notify("Enter a valid integer", severity="warning", timeout=2)
+            return
+        if idx < 0:
+            self.app.notify(
+                "Row index must be non-negative", severity="warning", timeout=2
+            )
+            return
+        self.app.apply_jump_to_line_row(idx)
+        self.app.pop_screen()
+
+
 def _cell_value_to_str(value: object) -> str:
     """Plain string for DataTable cell contents (clipboard / display)."""
     if value is None:
@@ -1671,6 +1719,7 @@ class H5TUIApp(App):
         Binding("P", "toggle_plot_histogram", "Histogram", show=True),
         Binding("s", "save_plot", "Save plot", show=True),
         Binding("A", "aggregate_data", "Summary", show=True),
+        Binding(":", "jump_to_line", "Jump to line", show=False),
         Binding("J", "scroll_preview_down", "Scroll preview", show=False),
         Binding("K", "scroll_preview_up", "Scroll preview", show=False),
     ]
@@ -2182,6 +2231,91 @@ class H5TUIApp(App):
         self._lazy_2d_window_col = bc
         self.refresh_lazy_2d_datatable(cursor_row=cr, cursor_col=cc)
 
+    def _jump_to_line_eligible(self) -> bool:
+        """Plain 1D/2D DataTable (lazy windowed or small in-memory), not plot/recarray."""
+        if not self.has_class("view-dataset") or not self.has_class("view-dtable"):
+            return False
+        if self.has_class("view-plot"):
+            return False
+        if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+            dset = self._file[self._lazy_dset_path]
+            return _lazy_h5_plain_1d_datatable(dset) or _lazy_h5_plain_2d_datatable(
+                dset
+            )
+        data = getattr(self, "_data", None)
+        if data is None:
+            return False
+        return should_use_1d_table(data) or should_use_2d_table(data)
+
+    def apply_jump_to_line_row(self, row_index: int) -> None:
+        """Select global row ``row_index`` (0-based); 2D keeps the current column."""
+        if not self._jump_to_line_eligible():
+            return
+        df = self._preview._df
+        if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+            dset = self._file[self._lazy_dset_path]
+            if _lazy_h5_plain_1d_datatable(dset):
+                n = self._lazy_1d_total
+                if n <= 0:
+                    return
+                g = max(0, min(int(row_index), n - 1))
+                self.lazy_1d_set_global_index(g)
+                return
+            if _lazy_h5_plain_2d_datatable(dset):
+                nr = self._lazy_2d_total_rows
+                if nr <= 0:
+                    return
+                gr = max(0, min(int(row_index), nr - 1))
+                _, c = df.cursor_coordinate
+                bc = self._lazy_2d_window_col
+                gc = bc + c
+                self.lazy_2d_set_global_cell(gr, gc)
+                return
+            return
+        data = self._data
+        if data is None:
+            return
+        if should_use_1d_table(data):
+            a = _as_display_1d(np.asarray(data))
+            n = int(a.shape[0])
+            if n <= 0:
+                return
+            r = max(0, min(int(row_index), n - 1))
+            df.move_cursor(row=r, column=0, scroll=True)
+        elif should_use_2d_table(np.asarray(data)):
+            arr = np.asarray(data)
+            nrows = int(arr.shape[0])
+            if nrows <= 0:
+                return
+            r = max(0, min(int(row_index), nrows - 1))
+            _, cc = df.cursor_coordinate
+            ncols = len(df.columns)
+            cc = max(0, min(cc, ncols - 1))
+            df.move_cursor(row=r, column=cc, scroll=True)
+
+    def action_jump_to_line(self) -> None:
+        """Open row jump dialog for plain 1D/2D dataset tables (``:``)."""
+        if isinstance(
+            self.screen,
+            (
+                AttributeScreen,
+                SavePlotScreen,
+                DatasetSummaryScreen,
+                JumpToLineScreen,
+            ),
+        ):
+            return
+        if not self.has_class("view-dataset"):
+            return
+        if not self._jump_to_line_eligible():
+            self.notify(
+                "Jump to line is only available in 1D/2D DataTable view",
+                severity="warning",
+                timeout=2,
+            )
+            return
+        self.push_screen(JumpToLineScreen())
+
     def update_header(self, header: Content) -> None:
         self._header_widget.update(header)
 
@@ -2209,7 +2343,7 @@ class H5TUIApp(App):
     def check_action(self, action, parameters):
         if action in ("scroll_preview_down", "scroll_preview_up") and isinstance(
             self.screen,
-            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen),
+            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen, JumpToLineScreen),
         ):
             # Attribute/save/summary modals use J/K for inner scroll.
             return False
@@ -2235,7 +2369,12 @@ class H5TUIApp(App):
         """Leave full dataset / table / plot view and return focus to the file columns."""
         if isinstance(
             self.screen,
-            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen),
+            (
+                AttributeScreen,
+                SavePlotScreen,
+                DatasetSummaryScreen,
+                JumpToLineScreen,
+            ),
         ):
             return
         if self.has_class("view-plot") and not self.has_class("view-dataset"):
@@ -2247,7 +2386,13 @@ class H5TUIApp(App):
             self.refresh_bindings()
             return
         if self.has_class("view-dataset"):
-            self.action_goto_parent()
+            # Do not use action_goto_parent(): at file root it no-ops for ``h`` but
+            # escape / q must still close the dataset preview.
+            self._clear_detail_view_state()
+            self._current_list.focus()
+            self.update_header(self._header_content(self._cur_dir))
+            self.refresh_preview()
+            self.refresh_bindings()
 
     def action_quit_application(self) -> None:
         """Always exit the app (bound to ``Q``)."""
@@ -2255,7 +2400,9 @@ class H5TUIApp(App):
 
     def action_quit_contextual(self) -> None:
         """``q``: leave plot or dataset view if open; otherwise quit (file browser only)."""
-        if isinstance(self.screen, (SavePlotScreen, DatasetSummaryScreen)):
+        if isinstance(
+            self.screen, (SavePlotScreen, DatasetSummaryScreen, JumpToLineScreen)
+        ):
             self.pop_screen()
             return
         if self.has_class("view-plot"):
@@ -2480,7 +2627,12 @@ class H5TUIApp(App):
         """Open save dialog for 1D numeric data (``s``)."""
         if isinstance(
             self.screen,
-            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen),
+            (
+                AttributeScreen,
+                SavePlotScreen,
+                DatasetSummaryScreen,
+                JumpToLineScreen,
+            ),
         ):
             return
         data, name = self._get_1d_save_plot_context()
@@ -2497,7 +2649,12 @@ class H5TUIApp(App):
         """Open dataset summary modal (``A``): numeric stats in a card grid."""
         if isinstance(
             self.screen,
-            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen),
+            (
+                AttributeScreen,
+                SavePlotScreen,
+                DatasetSummaryScreen,
+                JumpToLineScreen,
+            ),
         ):
             return
         n = self._preview_aggregate_element_count()
