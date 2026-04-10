@@ -776,6 +776,127 @@ def _cell_value_to_str(value: object) -> str:
     return str(value)
 
 
+def _scalar_clipboard_str(value: object) -> str:
+    """Clipboard text from a raw scalar (full float repr, not table formatting)."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, Text):
+        return value.plain
+    if isinstance(value, str):
+        return value
+    if isinstance(value, np.ndarray):
+        if value.shape == ():
+            value = value.item()
+        else:
+            return np.array2string(value, max_line_width=10_000)
+    elif isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        return repr(float(value))
+    if isinstance(value, (complex, np.complexfloating)):
+        return repr(complex(value))
+    return str(value)
+
+
+def _dt_row_label_plain(dt: DataTable, row_index: int) -> str:
+    rk = dt.ordered_rows[row_index]
+    lab = dt.rows[rk].label
+    return lab.plain if lab is not None else ""
+
+
+def _dt_col_label_plain(dt: DataTable, col_index: int) -> str:
+    ck = dt.ordered_columns[col_index]
+    return dt.columns[ck].label.plain
+
+
+def _datatable_source_clipboard_str(app, dt: DataTable) -> str | None:
+    """HDF5 / ``_data`` scalar for the focused cell, or None to use displayed cell text."""
+    if dt.row_count == 0 or not dt.columns:
+        return None
+    r, c = dt.cursor_coordinate
+    if r < 0 or c < 0:
+        return None
+
+    if getattr(app, "_lazy_1d_windowed", False) and getattr(
+        app, "_lazy_dset_path", None
+    ):
+        try:
+            dset = app._file[app._lazy_dset_path]
+            idx = int(app._lazy_1d_window_start) + r
+            return _scalar_clipboard_str(np.asarray(dset[idx]).item())
+        except Exception:
+            return None
+    if getattr(app, "_lazy_2d_windowed", False) and getattr(
+        app, "_lazy_dset_path", None
+    ):
+        try:
+            dset = app._file[app._lazy_dset_path]
+            gr = int(app._lazy_2d_window_row) + r
+            gc = int(app._lazy_2d_window_col) + c
+            return _scalar_clipboard_str(np.asarray(dset[gr, gc]).item())
+        except Exception:
+            return None
+
+    data = getattr(app, "_data", None)
+    if (
+        app.has_class("view-dataset")
+        and data is not None
+        and not getattr(app, "_lazy_mode", False)
+    ):
+        if is_dataframe(data):
+            names = get_colnames(data)
+            if not names or c >= len(names):
+                return None
+            return _scalar_clipboard_str(data[r][names[c]])
+        arr = np.asarray(data)
+        if arr.ndim == 1 and len(dt.ordered_columns) == 1:
+            return _scalar_clipboard_str(arr[r])
+        if arr.ndim == 2:
+            return _scalar_clipboard_str(arr[r, c])
+        return None
+
+    preview = getattr(app, "_preview", None)
+    if preview is not None and preview.has_class("browse-preview-table"):
+        name = app.get_selected_itemname()
+        if not name:
+            return None
+        path = h5_child_path(app._cur_dir, name)
+        try:
+            dset = app._file[path]
+        except Exception:
+            return None
+        rl = _dt_row_label_plain(dt, r)
+        cl = _dt_col_label_plain(dt, c)
+        if rl == "…" or cl == "…":
+            return None
+        try:
+            gr = int(rl)
+        except ValueError:
+            return None
+        try:
+            if dset.dtype.fields is not None and dset.ndim == 1:
+                names = dset.dtype.names
+                if not names or cl not in names:
+                    return None
+                return _scalar_clipboard_str(np.asarray(dset[cl][gr]).item())
+            if dset.ndim == 1:
+                return _scalar_clipboard_str(np.asarray(dset[gr]).item())
+            if dset.ndim == 2:
+                gc = int(cl)
+                return _scalar_clipboard_str(np.asarray(dset[gr, gc]).item())
+        except Exception:
+            return None
+        return None
+
+    return None
+
+
 class MyDataTable(DataTable):
     """Jump distance for H/J/K/L (capital) — move cursor by this many rows/columns."""
 
@@ -867,11 +988,13 @@ class MyDataTable(DataTable):
         """Copy the focused cell value to the app clipboard."""
         if self.row_count == 0:
             return
-        try:
-            value = self.get_cell_at(self.cursor_coordinate)
-        except Exception:
-            return
-        self.app.copy_to_clipboard(_cell_value_to_str(value))
+        s = _datatable_source_clipboard_str(self.app, self)
+        if s is None:
+            try:
+                s = _cell_value_to_str(self.get_cell_at(self.cursor_coordinate))
+            except Exception:
+                return
+        self.app.copy_to_clipboard(s)
         self.app.notify("Copied to clipboard", timeout=1.5)
 
     def update(self, value):
