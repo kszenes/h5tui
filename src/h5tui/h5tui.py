@@ -601,8 +601,33 @@ class DatasetSummaryScreen(ModalScreen):
         Binding("d", "scroll_summary_page_down", "Page down", priority=True),
     ]
 
-    def __init__(self, data: np.ndarray, id=None) -> None:
+    def __init__(
+        self,
+        data: np.ndarray | None = None,
+        *,
+        streaming_stats: dict[str, float] | None = None,
+        id=None,
+    ) -> None:
         super().__init__(id=id)
+        if streaming_stats is not None:
+            st = streaming_stats
+            self._stat_rows = [
+                [
+                    ("Mean", f"{float(st['mean']):.5g}"),
+                    ("Var", f"{float(st['var']):.5g}"),
+                    ("Std", f"{float(st['std']):.5g}"),
+                    ("L2 norm", f"{float(st['L2 norm']):.5g}"),
+                ],
+                [
+                    ("Max", f"{float(st['max']):.5g}"),
+                    ("Max idx", "— (chunked scan)"),
+                    ("Min", f"{float(st['min']):.5g}"),
+                    ("Min idx", "— (chunked scan)"),
+                ],
+            ]
+            return
+        if data is None:
+            raise ValueError("DatasetSummaryScreen requires data or streaming_stats")
         arr = np.asarray(data)
         flat_max = int(np.argmax(arr))
         flat_min = int(np.argmin(arr))
@@ -810,6 +835,262 @@ class MyDataTable(DataTable):
             cells = tuple(_format_table_cell(row[j]) for j in range(ncols))
             self.add_row(*cells, label=str(i))
 
+    def update_1d_window(self, arr: np.ndarray, base_index: int) -> None:
+        """1D table with global row labels ``base_index`` … (sliding window)."""
+        a = np.asarray(arr)
+        self.clear(columns=True)
+        self.add_columns("")
+        if a.size == 0:
+            return
+        bi = int(base_index)
+        for i in range(int(a.shape[0])):
+            self.add_row(
+                _format_1d_value_display(a[i]),
+                label=str(bi + i),
+            )
+
+    def update_2d_window(self, arr: np.ndarray, base_row: int, base_col: int) -> None:
+        """2D grid with global column headers and row labels (sliding view)."""
+        a = np.asarray(arr)
+        self.clear(columns=True)
+        if a.size == 0:
+            return
+        nrows, ncols = int(a.shape[0]), int(a.shape[1])
+        br, bc = int(base_row), int(base_col)
+        self.add_columns(*(str(bc + j) for j in range(ncols)))
+        for i in range(nrows):
+            row = a[i]
+            cells = tuple(_format_table_cell(row[j]) for j in range(ncols))
+            self.add_row(*cells, label=str(br + i))
+
+
+class LazyH5DataTable(MyDataTable):
+    """DataTable that loads visible ranges of large 1D/2D datasets as you navigate."""
+
+    def _lazy_mode(self) -> str | None:
+        app = self.app
+        if getattr(app, "_lazy_2d_windowed", False):
+            return "2d"
+        if getattr(app, "_lazy_1d_windowed", False):
+            return "1d"
+        return None
+
+    def action_cursor_down(self) -> None:
+        la = self.app
+        mode = self._lazy_mode()
+        if mode == "2d":
+            r, c = self.cursor_coordinate
+            br = la._lazy_2d_window_row
+            nr = la._lazy_2d_total_rows
+            wr = LAZY_2D_WINDOW_ROWS
+            g = br + r
+            if r == self.row_count - 1 and g < nr - 1:
+                new_g = g + 1
+                la._lazy_2d_window_row = min(br + 1, max(0, nr - wr))
+                la.refresh_lazy_2d_datatable(
+                    cursor_row=new_g - la._lazy_2d_window_row,
+                    cursor_col=c,
+                )
+                return
+        elif mode == "1d":
+            r, _ = self.cursor_coordinate
+            base = la._lazy_1d_window_start
+            n = la._lazy_1d_total
+            w = LAZY_DATATABLE_WINDOW_SIZE
+            g = base + r
+            if r == self.row_count - 1 and g < n - 1:
+                new_g = g + 1
+                la._lazy_1d_window_start = min(base + 1, max(0, n - w))
+                la.refresh_lazy_1d_datatable(
+                    cursor_row=new_g - la._lazy_1d_window_start
+                )
+                return
+        super().action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        la = self.app
+        mode = self._lazy_mode()
+        if mode == "2d":
+            r, c = self.cursor_coordinate
+            br = la._lazy_2d_window_row
+            gr = br + r
+            if r == 0 and gr > 0:
+                new_g = gr - 1
+                la._lazy_2d_window_row = max(0, br - 1)
+                la.refresh_lazy_2d_datatable(
+                    cursor_row=new_g - la._lazy_2d_window_row,
+                    cursor_col=c,
+                )
+                return
+        elif mode == "1d":
+            r, _ = self.cursor_coordinate
+            base = la._lazy_1d_window_start
+            g = base + r
+            if r == 0 and g > 0:
+                new_g = g - 1
+                la._lazy_1d_window_start = max(0, base - 1)
+                la.refresh_lazy_1d_datatable(
+                    cursor_row=new_g - la._lazy_1d_window_start
+                )
+                return
+        super().action_cursor_up()
+
+    def action_cursor_right(self) -> None:
+        la = self.app
+        if self._lazy_mode() == "2d":
+            r, c = self.cursor_coordinate
+            bc = la._lazy_2d_window_col
+            nc = la._lazy_2d_total_cols
+            wc = LAZY_2D_WINDOW_COLS
+            gc = bc + c
+            if c == len(self.columns) - 1 and gc < nc - 1:
+                new_gc = gc + 1
+                la._lazy_2d_window_col = min(bc + 1, max(0, nc - wc))
+                la.refresh_lazy_2d_datatable(
+                    cursor_row=r,
+                    cursor_col=new_gc - la._lazy_2d_window_col,
+                )
+                return
+        super().action_cursor_right()
+
+    def action_cursor_left(self) -> None:
+        la = self.app
+        if self._lazy_mode() == "2d":
+            r, c = self.cursor_coordinate
+            bc = la._lazy_2d_window_col
+            gc = bc + c
+            if c == 0 and gc > 0:
+                new_gc = gc - 1
+                la._lazy_2d_window_col = max(0, bc - 1)
+                la.refresh_lazy_2d_datatable(
+                    cursor_row=r,
+                    cursor_col=new_gc - la._lazy_2d_window_col,
+                )
+                return
+        super().action_cursor_left()
+
+    def action_jump_down(self) -> None:
+        la = self.app
+        mode = self._lazy_mode()
+        if mode == "2d":
+            r, c = self.cursor_coordinate
+            br, bc = la._lazy_2d_window_row, la._lazy_2d_window_col
+            gr, gc = br + r, bc + c
+            ng = min(gr + self._JUMP, la._lazy_2d_total_rows - 1)
+            la.lazy_2d_set_global_cell(ng, gc)
+            return
+        if mode == "1d":
+            r, _ = self.cursor_coordinate
+            g = la._lazy_1d_window_start + r
+            ng = min(g + self._JUMP, la._lazy_1d_total - 1)
+            la.lazy_1d_set_global_index(ng)
+            return
+        super().action_jump_down()
+
+    def action_jump_up(self) -> None:
+        la = self.app
+        mode = self._lazy_mode()
+        if mode == "2d":
+            r, c = self.cursor_coordinate
+            br, bc = la._lazy_2d_window_row, la._lazy_2d_window_col
+            gr, gc = br + r, bc + c
+            ng = max(0, gr - self._JUMP)
+            la.lazy_2d_set_global_cell(ng, gc)
+            return
+        if mode == "1d":
+            r, _ = self.cursor_coordinate
+            g = la._lazy_1d_window_start + r
+            ng = max(0, g - self._JUMP)
+            la.lazy_1d_set_global_index(ng)
+            return
+        super().action_jump_up()
+
+    def action_jump_right(self) -> None:
+        la = self.app
+        if self._lazy_mode() == "2d":
+            r, c = self.cursor_coordinate
+            br, bc = la._lazy_2d_window_row, la._lazy_2d_window_col
+            gr, gc = br + r, bc + c
+            ngc = min(gc + self._JUMP, la._lazy_2d_total_cols - 1)
+            la.lazy_2d_set_global_cell(gr, ngc)
+            return
+        super().action_jump_right()
+
+    def action_jump_left(self) -> None:
+        la = self.app
+        if self._lazy_mode() == "2d":
+            r, c = self.cursor_coordinate
+            br, bc = la._lazy_2d_window_row, la._lazy_2d_window_col
+            gr, gc = br + r, bc + c
+            ngc = max(0, gc - self._JUMP)
+            la.lazy_2d_set_global_cell(gr, ngc)
+            return
+        super().action_jump_left()
+
+    def action_scroll_top(self) -> None:
+        la = self.app
+        mode = self._lazy_mode()
+        if mode == "2d":
+            la.lazy_2d_set_global_cell(0, 0)
+            return
+        if mode == "1d":
+            la.lazy_1d_set_global_index(0)
+            return
+        super().action_scroll_top()
+
+    def action_scroll_bottom(self) -> None:
+        la = self.app
+        mode = self._lazy_mode()
+        if mode == "2d":
+            la.lazy_2d_set_global_cell(
+                la._lazy_2d_total_rows - 1, la._lazy_2d_total_cols - 1
+            )
+            return
+        if mode == "1d":
+            la.lazy_1d_set_global_index(la._lazy_1d_total - 1)
+            return
+        super().action_scroll_bottom()
+
+    def action_page_down(self) -> None:
+        la = self.app
+        mode = self._lazy_mode()
+        if mode == "2d":
+            r, c = self.cursor_coordinate
+            br, bc = la._lazy_2d_window_row, la._lazy_2d_window_col
+            gr, gc = br + r, bc + c
+            step = max(1, LAZY_2D_WINDOW_ROWS // 2)
+            ng = min(gr + step, la._lazy_2d_total_rows - 1)
+            la.lazy_2d_set_global_cell(ng, gc)
+            return
+        if mode == "1d":
+            r, _ = self.cursor_coordinate
+            g = la._lazy_1d_window_start + r
+            step = max(1, LAZY_DATATABLE_WINDOW_SIZE // 2)
+            ng = min(g + step, la._lazy_1d_total - 1)
+            la.lazy_1d_set_global_index(ng)
+            return
+        super().action_page_down()
+
+    def action_page_up(self) -> None:
+        la = self.app
+        mode = self._lazy_mode()
+        if mode == "2d":
+            r, c = self.cursor_coordinate
+            br, bc = la._lazy_2d_window_row, la._lazy_2d_window_col
+            gr, gc = br + r, bc + c
+            step = max(1, LAZY_2D_WINDOW_ROWS // 2)
+            ng = max(0, gr - step)
+            la.lazy_2d_set_global_cell(ng, gc)
+            return
+        if mode == "1d":
+            r, _ = self.cursor_coordinate
+            g = la._lazy_1d_window_start + r
+            step = max(1, LAZY_DATATABLE_WINDOW_SIZE // 2)
+            ng = max(0, g - step)
+            la.lazy_1d_set_global_index(ng)
+            return
+        super().action_page_up()
+
 
 def get_colnames(obj):
     """Return the column names of numpy recarray"""
@@ -871,6 +1152,18 @@ _LARGE_AGGREGATE_ELEMENT_THRESHOLD = 10_000_000
 # Double-press confirm window: ``App.notify`` timeout and ``set_timer`` (message pump).
 _LARGE_CONFIRM_WINDOW_SEC = 4.0
 
+# Above this element count, keep the ``h5py.Dataset`` and read slices (plain dtypes only).
+LAZY_THRESHOLD = MAX_TABLE_ELEMENTS
+# Plot sampling for lazy datasets (terminal plot is downsampled).
+_PLOT_MAX_1D = 20_000
+_PLOT_MAX_2D = 200
+# Summary streaming chunk size.
+_AGG_CHUNK = 2_000_000
+# Lazy DataTable window sizes (rows/cols loaded from HDF5 at a time).
+LAZY_DATATABLE_WINDOW_SIZE = 300
+LAZY_2D_WINDOW_ROWS = 120
+LAZY_2D_WINDOW_COLS = 120
+
 
 def _dataset_path_element_count(h5file: h5py.File, path: str) -> int | None:
     """HDF5 element count without reading array data."""
@@ -915,6 +1208,30 @@ def should_use_2d_table(arr) -> bool:
 def should_use_ndarray_datatable(arr) -> bool:
     """Recarray uses ``update``; plain 1D/2D use ``update_1d`` / ``update_2d``."""
     return should_use_1d_table(arr) or should_use_2d_table(arr)
+
+
+def _lazy_dataset_eligible(dset: h5py.Dataset) -> bool:
+    """Plain numeric arrays only; compound / object dtypes load eagerly."""
+    return (
+        len(dset.dtype) == 0
+        and dset.dtype != np.dtype("O")
+        and int(dset.size) > LAZY_THRESHOLD
+    )
+
+
+def _lazy_h5_plain_1d_datatable(dset: h5py.Dataset) -> bool:
+    """1D plain element dtype — fill DataTable from slices without full load."""
+    return len(dset.dtype) == 0 and dset.dtype != np.dtype("O") and dset.ndim == 1
+
+
+def _lazy_h5_plain_2d_datatable(dset: h5py.Dataset) -> bool:
+    """2D plain matrix; grid view with sliding row/column windows."""
+    if len(dset.dtype) != 0 or dset.dtype == np.dtype("O") or dset.ndim != 2:
+        return False
+    r, c = int(dset.shape[0]), int(dset.shape[1])
+    if min(r, c) == 0 or min(r, c) == 1:
+        return False
+    return c <= MAX_TABLE_COLUMNS
 
 
 def _format_array_element(v) -> str:
@@ -1015,6 +1332,144 @@ def format_ndarray_text(
     )
 
 
+def format_1d_with_indices_lazy(dset: h5py.Dataset) -> str:
+    """Indexed 1D text using only head/tail slices (no full vector load)."""
+    n = int(dset.shape[0])
+    edgeitems = _ND_EDGEITEMS
+    idxw = max(1, len(str(max(0, n - 1))))
+    if n == 0:
+        return ""
+
+    def line(i: int, val: object) -> str:
+        return f"{i:>{idxw}}: {_format_1d_value_display(val)}"
+
+    if n <= _ND_THRESHOLD or n <= 2 * edgeitems:
+        a = np.asarray(dset[:n])
+        return "\n".join(line(i, a[i]) for i in range(n))
+
+    head = np.asarray(dset[:edgeitems])
+    tail = np.asarray(dset[n - edgeitems : n])
+    parts = [line(i, head[j]) for j, i in enumerate(range(edgeitems))]
+    omitted = n - 2 * edgeitems
+    parts.append(f"… ({omitted} elements omitted) …")
+    parts.extend(line(i, tail[j]) for j, i in enumerate(range(n - edgeitems, n)))
+    return "\n".join(parts)
+
+
+def format_ndarray_text_lazy(dset: h5py.Dataset, *, line_width: int) -> str:
+    """Abbreviated text for a large on-disk dataset without loading it entirely."""
+    if len(dset.dtype) != 0 or dset.dtype == np.dtype("O"):
+        return "(unsupported dtype for text preview)"
+    if dset.ndim == 1:
+        return format_1d_with_indices_lazy(dset)
+    if dset.ndim == 2:
+        r, c = int(dset.shape[0]), int(dset.shape[1])
+        rs, cs = min(8, r), min(12, c)
+        corner = np.asarray(dset[:rs, :cs])
+        body = np.array2string(
+            corner,
+            max_line_width=line_width,
+            threshold=_ND_THRESHOLD,
+            edgeitems=_ND_EDGEITEMS,
+            suppress_small=False,
+        )
+        return f"shape {dset.shape} (top-left {rs}×{cs})\n{body}\n…"
+    sl = tuple(slice(0, min(4, int(s))) for s in dset.shape)
+    small = np.asarray(dset[sl])
+    body = np.array2string(
+        small,
+        max_line_width=line_width,
+        threshold=min(_ND_THRESHOLD, 100),
+        edgeitems=min(_ND_EDGEITEMS, 2),
+        suppress_small=False,
+    )
+    return f"shape {dset.shape}\n{body}\n…"
+
+
+def is_plotable_lazy_dset(dset: h5py.Dataset) -> bool:
+    return len(dset.dtype) == 0 and dset.dtype != np.dtype("O") and dset.ndim in (1, 2)
+
+
+def is_aggregatable_lazy_dset(dset: h5py.Dataset) -> bool:
+    return (
+        len(dset.dtype) == 0
+        and dset.dtype != np.dtype("O")
+        and np.issubdtype(dset.dtype, np.number)
+        and int(dset.size) > 1
+    )
+
+
+def aggregate_h5_numeric_chunks(dset: h5py.Dataset) -> dict[str, float]:
+    """Mean/var/std/min/max/L2 over chunks (float64 accumulators)."""
+    n = int(dset.size)
+    chunk = _AGG_CHUNK
+    sum_x = 0.0
+    sum_x2 = 0.0
+    vmin = np.inf
+    vmax = -np.inf
+
+    linear: h5py.Dataset | None
+    try:
+        linear = dset.reshape((n,))
+    except Exception:
+        linear = None
+
+    if linear is not None:
+        for start in range(0, n, chunk):
+            end = min(start + chunk, n)
+            b = np.asarray(linear[start:end], dtype=np.float64)
+            sum_x += float(b.sum())
+            sum_x2 += float(np.dot(b, b))
+            vmin = min(vmin, float(b.min()))
+            vmax = max(vmax, float(b.max()))
+    else:
+        trailing = int(np.prod(dset.shape[1:])) if dset.ndim > 1 else 1
+        rows_per_chunk = max(1, chunk // max(1, trailing))
+        nrows = int(dset.shape[0])
+        for r0 in range(0, nrows, rows_per_chunk):
+            block = dset[r0 : min(r0 + rows_per_chunk, nrows)]
+            b = np.asarray(block, dtype=np.float64).ravel()
+            if b.size == 0:
+                continue
+            sum_x += float(b.sum())
+            sum_x2 += float(np.dot(b, b))
+            vmin = min(vmin, float(b.min()))
+            vmax = max(vmax, float(b.max()))
+
+    mean = sum_x / n
+    var = max(0.0, sum_x2 / n - mean * mean)
+    std = float(np.sqrt(var))
+    l2 = float(np.sqrt(sum_x2))
+    return {
+        "mean": float(mean),
+        "var": float(var),
+        "std": std,
+        "max": vmax,
+        "min": vmin,
+        "L2 norm": l2,
+    }
+
+
+def sample_dset_for_plot_1d(dset: h5py.Dataset) -> np.ndarray:
+    n = int(dset.shape[0])
+    if n <= _PLOT_MAX_1D:
+        return np.asarray(dset[:])
+    idx = np.linspace(0, n - 1, _PLOT_MAX_1D, dtype=np.intp)
+    return np.asarray(dset[idx])
+
+
+def sample_dset_for_plot_2d(dset: h5py.Dataset) -> np.ndarray:
+    r, c = int(dset.shape[0]), int(dset.shape[1])
+    mr, mc = min(_PLOT_MAX_2D, r), min(_PLOT_MAX_2D, c)
+    if r <= _PLOT_MAX_2D and c <= _PLOT_MAX_2D:
+        return np.asarray(dset[:, :])
+    ri = np.linspace(0, r - 1, mr, dtype=np.intp)
+    ci = np.linspace(0, c - 1, mc, dtype=np.intp)
+    # h5py allows only 1D fancy indices; ``np.ix_`` is not supported on Dataset.
+    rows = np.asarray(dset[ri])
+    return rows[:, ci]
+
+
 def add_escape_chars(string: str):
     return string.replace("[", r"\[")
 
@@ -1065,7 +1520,7 @@ class ColumnContent(VerticalScroll):
     def compose(self):
         self._content = Static(id="data", markup=False)
         self._plot = PlotextPlot(id="plot")
-        self._df = MyDataTable(id="dtable")
+        self._df = LazyH5DataTable(id="dtable")
         yield self._content
         yield self._plot
         yield self._df
@@ -1073,6 +1528,44 @@ class ColumnContent(VerticalScroll):
     def reprint(self):
         """Refresh dataset text or table content using ``H5TUIApp._data``."""
         app = self.app
+        if getattr(app, "_lazy_mode", False):
+            path = getattr(app, "_lazy_dset_path", None)
+            if not path:
+                return
+            dset = app._file[path]
+            lw = int(getattr(app, "_preview_line_width", _ND_LINEWIDTH_DEFAULT))
+            if _lazy_h5_plain_1d_datatable(dset):
+                try:
+                    app.refresh_lazy_1d_datatable(cursor_row=0)
+                except Exception as e:
+                    self.notify(f"Could not read dataset: {e}", severity="error")
+                    return
+                self.notify(
+                    "keys: j/k row; J/K jump ±10; y copy; esc quit",
+                    timeout=5,
+                )
+                self._df.focus()
+                return
+            if _lazy_h5_plain_2d_datatable(dset):
+                try:
+                    app.refresh_lazy_2d_datatable(cursor_row=0, cursor_col=0)
+                except Exception as e:
+                    self.notify(f"Could not read dataset: {e}", severity="error")
+                    return
+                self.notify(
+                    "keys: h/j/k/l; H/J/K/L jump ±10; y copy; esc quit",
+                    timeout=5,
+                )
+                self._df.focus()
+                return
+            self.notify(
+                "Abbreviated text preview (dataset too large for table).",
+                severity="information",
+                timeout=3,
+            )
+            self._content.update(format_ndarray_text_lazy(dset, line_width=lw))
+            self.focus()
+            return
         data = getattr(app, "_data", None)
         if data is None:
             return
@@ -1094,6 +1587,42 @@ class ColumnContent(VerticalScroll):
 
     def replot(self):
         """Plot data, currently only supports 1D and 2D data"""
+        app = self.app
+        if getattr(app, "_lazy_mode", False):
+            path = getattr(app, "_lazy_dset_path", None)
+            if not path:
+                return
+            dset = app._file[path]
+            if not is_plotable_lazy_dset(dset):
+                return
+            self._plot.plt.clear_figure()
+            if dset.ndim == 1:
+                data = sample_dset_for_plot_1d(dset)
+                n = int(dset.shape[0])
+                x = np.linspace(0, n - 1, data.shape[0])
+                if getattr(app, "_plot_histogram", False):
+                    _plot_1d_histogram(self._plot.plt, data)
+                else:
+                    self._plot.plt.xlabel("Index")
+                    self._plot.plt.plot(
+                        x,
+                        data,
+                        color="cyan",
+                        marker="braille",
+                    )
+            else:
+                data = sample_dset_for_plot_2d(dset)
+                nrows, ncols = data.shape
+                self._plot.plt.plot_size(nrows, ncols)
+                size_threshold = 100
+                if nrows < size_threshold and ncols < size_threshold:
+                    self._plot.plt.heatmap(pd.DataFrame(data))
+                    self._plot.plt.title("")
+                else:
+                    self._plot.plt.matrix_plot(data.tolist())
+                self._plot.plt.xlabel("Column")
+                self._plot.plt.ylabel("Row")
+            return
         raw = getattr(self.app, "_data", None)
         if raw is None:
             return
@@ -1172,6 +1701,17 @@ class H5TUIApp(App):
         # Large-dataset double-confirm: same key as ``_large_op_arm`` + second press runs op.
         self._large_op_arm: tuple | None = None
         self._large_confirm_timer = None
+        # Lazy HDF5 view: keep path + window state; avoid ``dset[...]`` for huge arrays.
+        self._lazy_mode = False
+        self._lazy_dset_path: str | None = None
+        self._lazy_1d_windowed = False
+        self._lazy_1d_total = 0
+        self._lazy_1d_window_start = 0
+        self._lazy_2d_windowed = False
+        self._lazy_2d_total_rows = 0
+        self._lazy_2d_total_cols = 0
+        self._lazy_2d_window_row = 0
+        self._lazy_2d_window_col = 0
 
     def on_unmount(self) -> None:
         self._cancel_large_confirm_timer()
@@ -1397,6 +1937,16 @@ class H5TUIApp(App):
         self._data = None
         self._open_dataset_path = None
         self._plot_histogram = False
+        self._lazy_mode = False
+        self._lazy_dset_path = None
+        self._lazy_1d_windowed = False
+        self._lazy_1d_total = 0
+        self._lazy_1d_window_start = 0
+        self._lazy_2d_windowed = False
+        self._lazy_2d_total_rows = 0
+        self._lazy_2d_total_cols = 0
+        self._lazy_2d_window_row = 0
+        self._lazy_2d_window_col = 0
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
         self.remove_class("view-dtable")
@@ -1485,17 +2035,50 @@ class H5TUIApp(App):
                 self.notify(f"Not a dataset: {path}", severity="error", timeout=8)
                 return
             dset = node
-            dset_data = dset[...]
         except Exception as e:
             self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
             return
 
-        self._data = dset_data
+        lazy = _lazy_dataset_eligible(dset)
+        if lazy:
+            self._lazy_mode = True
+            self._lazy_dset_path = path
+            self._data = None
+        else:
+            try:
+                dset_data = dset[...]
+            except Exception as e:
+                self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+                return
+            self._lazy_mode = False
+            self._lazy_dset_path = None
+            self._data = dset_data
+            self._lazy_1d_windowed = False
+            self._lazy_2d_windowed = False
+
         self._open_dataset_path = path
 
         self.add_class("view-dataset")
         self.add_class("preview-maximized")
-        if is_dataframe(self._data):
+        if lazy:
+            if _lazy_h5_plain_1d_datatable(dset):
+                self.add_class("view-dtable")
+                self._lazy_1d_windowed = True
+                self._lazy_2d_windowed = False
+                self._lazy_1d_total = int(dset.shape[0])
+                self._lazy_1d_window_start = 0
+            elif _lazy_h5_plain_2d_datatable(dset):
+                self.add_class("view-dtable")
+                self._lazy_2d_windowed = True
+                self._lazy_1d_windowed = False
+                self._lazy_2d_total_rows = int(dset.shape[0])
+                self._lazy_2d_total_cols = int(dset.shape[1])
+                self._lazy_2d_window_row = 0
+                self._lazy_2d_window_col = 0
+            else:
+                self._lazy_1d_windowed = False
+                self._lazy_2d_windowed = False
+        elif is_dataframe(self._data):
             self.add_class("view-dtable")
         elif should_use_ndarray_datatable(self._data):
             self.add_class("view-dtable")
@@ -1514,6 +2097,90 @@ class H5TUIApp(App):
             self._preview._df.focus()
         else:
             self._preview.focus()
+
+    def refresh_lazy_1d_datatable(self, *, cursor_row: int | None = None) -> None:
+        """Load ``LAZY_DATATABLE_WINDOW_SIZE`` rows from ``_lazy_1d_window_start``."""
+        if not self._lazy_dset_path:
+            return
+        dset = self._file[self._lazy_dset_path]
+        n = self._lazy_1d_total
+        w = LAZY_DATATABLE_WINDOW_SIZE
+        base = max(0, min(self._lazy_1d_window_start, max(0, n - w)))
+        self._lazy_1d_window_start = base
+        end = min(base + w, n)
+        chunk = np.asarray(dset[base:end])
+        self._preview._df.update_1d_window(chunk, base)
+        if cursor_row is not None and self._preview._df.row_count > 0:
+            cr = max(0, min(int(cursor_row), self._preview._df.row_count - 1))
+            self._preview._df.move_cursor(row=cr, column=0, scroll=True)
+
+    def lazy_1d_set_global_index(self, global_idx: int) -> None:
+        """Scroll the window so global row index ``global_idx`` is visible and selected."""
+        n = self._lazy_1d_total
+        w = LAZY_DATATABLE_WINDOW_SIZE
+        g = max(0, min(int(global_idx), n - 1))
+        if n <= w:
+            self._lazy_1d_window_start = 0
+            cur = g
+        else:
+            self._lazy_1d_window_start = min(max(0, g - w + 1), n - w)
+            cur = g - self._lazy_1d_window_start
+        self.refresh_lazy_1d_datatable(cursor_row=cur)
+
+    def refresh_lazy_2d_datatable(
+        self, *, cursor_row: int | None = None, cursor_col: int | None = None
+    ) -> None:
+        """Load a ``LAZY_2D_WINDOW_ROWS`` × ``LAZY_2D_WINDOW_COLS`` slice from disk."""
+        if not self._lazy_dset_path:
+            return
+        dset = self._file[self._lazy_dset_path]
+        nr = self._lazy_2d_total_rows
+        nc = self._lazy_2d_total_cols
+        wr, wc = LAZY_2D_WINDOW_ROWS, LAZY_2D_WINDOW_COLS
+        br = max(0, min(self._lazy_2d_window_row, max(0, nr - 1)))
+        bc = max(0, min(self._lazy_2d_window_col, max(0, nc - 1)))
+        if nr > wr:
+            br = min(br, nr - wr)
+        else:
+            br = 0
+        if nc > wc:
+            bc = min(bc, nc - wc)
+        else:
+            bc = 0
+        self._lazy_2d_window_row = br
+        self._lazy_2d_window_col = bc
+        r2 = min(wr, nr - br)
+        c2 = min(wc, nc - bc)
+        chunk = np.asarray(dset[br : br + r2, bc : bc + c2])
+        self._preview._df.update_2d_window(chunk, br, bc)
+        if cursor_row is not None and self._preview._df.row_count > 0:
+            cr = max(0, min(int(cursor_row), self._preview._df.row_count - 1))
+            ncols = len(self._preview._df.columns)
+            cc = max(
+                0, min(int(cursor_col if cursor_col is not None else 0), ncols - 1)
+            )
+            self._preview._df.move_cursor(row=cr, column=cc, scroll=True)
+
+    def lazy_2d_set_global_cell(self, global_row: int, global_col: int) -> None:
+        """Scroll both axes so global cell ``(global_row, global_col)`` is selected."""
+        nr = self._lazy_2d_total_rows
+        nc = self._lazy_2d_total_cols
+        wr, wc = LAZY_2D_WINDOW_ROWS, LAZY_2D_WINDOW_COLS
+        gr = max(0, min(int(global_row), nr - 1))
+        gc = max(0, min(int(global_col), nc - 1))
+        if nr <= wr:
+            br, cr = 0, gr
+        else:
+            br = min(max(0, gr - wr + 1), nr - wr)
+            cr = gr - br
+        if nc <= wc:
+            bc, cc = 0, gc
+        else:
+            bc = min(max(0, gc - wc + 1), nc - wc)
+            cc = gc - bc
+        self._lazy_2d_window_row = br
+        self._lazy_2d_window_col = bc
+        self.refresh_lazy_2d_datatable(cursor_row=cr, cursor_col=cc)
 
     def update_header(self, header: Content) -> None:
         self._header_widget.update(header)
@@ -1631,7 +2298,13 @@ class H5TUIApp(App):
 
         if self.has_class("view-dataset"):
             path = self._open_dataset_path
-            data_arr = self._data
+            if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+                dset = self._file[self._lazy_dset_path]
+                if dset.ndim != 1:
+                    return None, None
+                data_arr = sample_dset_for_plot_1d(dset)
+            else:
+                data_arr = self._data
         elif self.has_class("view-plot") and self._data is not None:
             path = self.get_selected_dataset_path()
             data_arr = self._data
@@ -1655,6 +2328,8 @@ class H5TUIApp(App):
     def _get_aggregate_data_context(self) -> np.ndarray | None:
         """Numeric array for summary: full dataset view, plot preview, or selected dataset."""
         if self.has_class("view-dataset"):
+            if getattr(self, "_lazy_mode", False):
+                return None
             d = self._data
             return None if d is None else np.asarray(d)
         if self.has_class("view-plot") and self._data is not None:
@@ -1670,6 +2345,8 @@ class H5TUIApp(App):
     def _preview_aggregate_element_count(self) -> int | None:
         """Element count for summary guard (uses dataset metadata when not yet loaded)."""
         if self.has_class("view-dataset"):
+            if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+                return int(self._file[self._lazy_dset_path].size)
             d = self._data
             return None if d is None else int(np.asarray(d).size)
         if self.has_class("view-plot") and self._data is not None:
@@ -1696,6 +2373,26 @@ class H5TUIApp(App):
         if self.has_class("view-dataset"):
             return self._open_dataset_path
         return self.get_selected_dataset_path()
+
+    def _view_dataset_plotable(self) -> bool:
+        if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+            return is_plotable_lazy_dset(self._file[self._lazy_dset_path])
+        return self._data is not None and is_plotable(self._data)
+
+    def _view_dataset_element_count(self) -> int:
+        if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+            return int(self._file[self._lazy_dset_path].size)
+        if self._data is None:
+            return 0
+        return int(np.asarray(self._data).size)
+
+    def _view_dataset_histogram_eligible(self) -> bool:
+        if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+            d = self._file[self._lazy_dset_path]
+            return (
+                d.ndim == 1 and len(d.dtype) == 0 and np.issubdtype(d.dtype, np.number)
+            )
+        return self._data is not None and is_histogram_eligible(self._data)
 
     def _cancel_large_confirm_timer(self) -> None:
         t = self._large_confirm_timer
@@ -1811,9 +2508,25 @@ class H5TUIApp(App):
                 timeout=3,
             )
             return
-        if self.has_class("view-dataset") or (
-            self.has_class("view-plot") and self._data is not None
-        ):
+        if self.has_class("view-dataset"):
+            if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+                if not is_aggregatable_lazy_dset(self._file[self._lazy_dset_path]):
+                    self.notify(
+                        "Select or open a numeric dataset to summarize",
+                        severity="warning",
+                        timeout=3,
+                    )
+                    return
+            else:
+                data = self._get_aggregate_data_context()
+                if data is None or not is_aggregatable(data):
+                    self.notify(
+                        "Select or open a numeric dataset to summarize",
+                        severity="warning",
+                        timeout=3,
+                    )
+                    return
+        elif self.has_class("view-plot") and self._data is not None:
             data = self._get_aggregate_data_context()
             if data is None or not is_aggregatable(data):
                 self.notify(
@@ -1837,6 +2550,21 @@ class H5TUIApp(App):
             return
 
         def _open_summary() -> None:
+            if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+                dset = self._file[self._lazy_dset_path]
+                if not is_aggregatable_lazy_dset(dset):
+                    return
+                try:
+                    st = aggregate_h5_numeric_chunks(dset)
+                except Exception as e:
+                    self.notify(
+                        f"Could not summarize dataset: {e}",
+                        severity="error",
+                        timeout=8,
+                    )
+                    return
+                self.push_screen(DatasetSummaryScreen(streaming_stats=st))
+                return
             data = self._get_aggregate_data_context()
             if data is None or not is_aggregatable(data):
                 return
@@ -1918,14 +2646,14 @@ class H5TUIApp(App):
 
     def action_toggle_plot(self):
         if self.has_class("view-dataset"):
-            if not is_plotable(self._data):
+            if not self._view_dataset_plotable():
                 self.notify(
                     "Currently only 1D and 2D data is plotable", severity="warning"
                 )
                 return
             opening = not self.has_class("view-plot")
             if opening:
-                n = int(np.asarray(self._data).size)
+                n = self._view_dataset_element_count()
 
                 def do_open():
                     self._plot_histogram = False
@@ -1987,7 +2715,7 @@ class H5TUIApp(App):
     def action_toggle_plot_histogram(self) -> None:
         """Show a value histogram for 1D numeric data (``P``)."""
         if self.has_class("view-dataset"):
-            if self._data is None or not is_histogram_eligible(self._data):
+            if not self._view_dataset_histogram_eligible():
                 self.notify(
                     "Histogram is only available for 1D numeric datasets",
                     severity="warning",
@@ -1999,7 +2727,7 @@ class H5TUIApp(App):
                 self._preview.replot()
                 self._preview.focus()
                 return
-            n = int(np.asarray(self._data).size)
+            n = self._view_dataset_element_count()
 
             def do_hist():
                 self._plot_histogram = True
