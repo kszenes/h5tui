@@ -1,8 +1,26 @@
+from textual import on
 from textual.app import App, ComposeResult
 from textual.events import Resize
 from textual.reactive import Reactive
-from textual.widgets import Footer, Header, OptionList, Static, DataTable
-from textual.containers import VerticalScroll, Horizontal, Vertical
+from textual.widgets import (
+    Footer,
+    Header,
+    OptionList,
+    Static,
+    DataTable,
+    Select,
+    Checkbox,
+    Input,
+    Button,
+    Label,
+)
+from textual.containers import (
+    VerticalScroll,
+    Horizontal,
+    Vertical,
+    VerticalGroup,
+    HorizontalGroup,
+)
 from textual.binding import Binding
 from textual.screen import ModalScreen
 from textual_plotext import PlotextPlot
@@ -120,6 +138,269 @@ class AttributeScreen(ModalScreen):
 
     def action_scroll_content_page_up(self):
         self._vertical_widget.scroll_page_up()
+
+
+def _default_histogram_bins(data: np.ndarray) -> int:
+    """Heuristic bin count (matches previous default behavior)."""
+    vals = np.asarray(data, dtype=np.float64).ravel()
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return 10
+    n = int(vals.size)
+    return min(40, max(10, int(np.sqrt(n))))
+
+
+def _plot_1d_histogram(plot_plt, data: np.ndarray, bins: int | None = None) -> None:
+    """Draw a histogram of ``data`` (1D) using NumPy binning and Plotext ``bar``."""
+    vals = np.asarray(data, dtype=np.float64).ravel()
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        plot_plt.xlabel("Value")
+        plot_plt.ylabel("Count")
+        return
+    nb = _default_histogram_bins(data) if bins is None else max(1, int(bins))
+    counts, edges = np.histogram(vals, bins=nb)
+    x = ((edges[:-1] + edges[1:]) / 2).tolist()
+    y = counts.astype(float).tolist()
+    plot_plt.bar(x, y, color="cyan")
+    plot_plt.xlabel("Value")
+    plot_plt.ylabel("Count")
+
+
+def _cubic_smooth_xy(
+    x: np.ndarray, y: np.ndarray
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Return dense (x, y) for a cubic spline through finite samples, or ``None``."""
+    from scipy.interpolate import CubicSpline
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size < 2:
+        return None
+    m = np.isfinite(x) & np.isfinite(y)
+    xv, yv = x[m], y[m]
+    if xv.size < 2:
+        return None
+    order = np.argsort(xv)
+    xv, yv = xv[order], yv[order]
+    # collapse duplicate x (rare for index axis)
+    if np.any(np.diff(xv) == 0):
+        uniq = np.concatenate([[True], np.diff(xv) != 0])
+        xv, yv = xv[uniq], yv[uniq]
+    if xv.size < 2:
+        return None
+    x_fine = np.linspace(float(xv[0]), float(xv[-1]), max(64, int(xv.size) * 8))
+    if xv.size >= 4:
+        y_fine = CubicSpline(xv, yv)(x_fine)
+    else:
+        y_fine = np.interp(x_fine, xv, yv)
+    return x_fine, y_fine
+
+
+def _open_saved_plot_path(path: str) -> None:
+    """Open ``path`` with the OS default application (e.g. PDF viewer)."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    ap = os.path.abspath(os.path.expanduser(path))
+    if not os.path.isfile(ap):
+        return
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", ap], check=False)
+        elif os.name == "nt":
+            os.startfile(ap)  # type: ignore[attr-defined]
+        elif shutil.which("xdg-open"):
+            subprocess.run(["xdg-open", ap], check=False)
+    except OSError:
+        pass
+
+
+def _save_1d_histogram_mpl(path: str, data: np.ndarray, bins: int) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    vals = np.asarray(data, dtype=np.float64).ravel()
+    vals = vals[np.isfinite(vals)]
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    if vals.size:
+        ax.hist(vals, bins=max(1, int(bins)), color="steelblue", edgecolor="black")
+    ax.set_xlabel("Value")
+    ax.set_ylabel("Count")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    _open_saved_plot_path(path)
+
+
+def _save_1d_lineplot_mpl(
+    path: str,
+    data: np.ndarray,
+    *,
+    show_lines: bool,
+    show_points: bool,
+    show_smooth: bool,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    y = np.asarray(data, dtype=np.float64).squeeze()
+    n = int(y.shape[0])
+    x = np.arange(n, dtype=float)
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    if not (show_lines or show_points or show_smooth):
+        ax.text(0.5, 0.5, "No display option selected", ha="center", va="center")
+    else:
+        if show_lines and show_points:
+            ax.plot(x, y, "-o", color="C0", markersize=3)
+        elif show_lines:
+            ax.plot(x, y, "-", color="C0")
+        elif show_points:
+            ax.plot(x, y, "o", color="C0", linestyle="none", markersize=4)
+        if show_smooth:
+            sm = _cubic_smooth_xy(x, y)
+            if sm is not None:
+                xf, yf = sm
+                ax.plot(xf, yf, "--", color="C1", label="cubic spline")
+                ax.legend(loc="best")
+    ax.set_xlabel("Index")
+    ax.set_ylabel("Value")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    _open_saved_plot_path(path)
+
+
+class SavePlotScreen(ModalScreen):
+    """Save 1D dataset as PDF: histogram or line plot (matplotlib).
+
+    After a successful save, the file is opened with the OS default app (e.g. Preview).
+    """
+
+    BINDINGS = [
+        Binding("escape,q", "close_save", "Close", show=True, priority=True),
+        Binding("Q", "quit_application", "Quit app", show=False, priority=True),
+    ]
+
+    def __init__(self, data: np.ndarray, dset_name: str, id=None) -> None:
+        super().__init__(id=id)
+        self._data = np.asarray(data)
+        self._dset_name = dset_name
+        self._default_bins = _default_histogram_bins(self._data)
+        safe = dset_name.replace("/", "_").strip() or "plot"
+        self._default_filename = f"{safe}.pdf"
+
+    def compose(self) -> ComposeResult:
+        with VerticalGroup(id="save-plot-dialog", classes="mode-lineplot"):
+            yield Static(f"Save plot · {self._dset_name}", id="save_plot_title")
+            yield Select(
+                (
+                    ("Line plot", "lineplot"),
+                    ("Histogram", "histogram"),
+                ),
+                id="plot_save_mode",
+                value="lineplot",
+                allow_blank=False,
+            )
+            with HorizontalGroup(classes="hist-opts"):
+                yield Label("Bins:")
+                yield Input(
+                    value=str(self._default_bins),
+                    id="save_bins",
+                    placeholder="Bins",
+                    type="integer",
+                )
+            with HorizontalGroup(classes="line-opts"):
+                yield Checkbox("Lines", value=True, id="line_lines")
+                yield Checkbox("Points", value=False, id="line_points")
+                yield Checkbox("Smooth (cubic spline)", value=False, id="line_smooth")
+            yield Label("Filename", id="save_filename_label")
+            yield Input(value=self._default_filename, id="save_filename")
+            yield Button("Save", variant="primary", id="save_plot_btn")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._set_mode_class()
+        self.query_one("#save_filename", Input).focus()
+
+    @staticmethod
+    def _mode_str(value: object) -> str:
+        """Normalize Select value to ``lineplot`` / ``histogram``.
+
+        Do not use ``Select.NULL`` / ``Select.BLANK``: names differ across Textual versions.
+        Our options are only these two strings; anything else is treated as line plot.
+        """
+        if value == "histogram":
+            return "histogram"
+        return "lineplot"
+
+    def _mode(self) -> str:
+        sel = self.query_one("#plot_save_mode", Select)
+        return self._mode_str(sel.value)
+
+    def _set_mode_class(self, mode: str | None = None) -> None:
+        dlg = self.query_one("#save-plot-dialog", VerticalGroup)
+        if mode is None:
+            mode = self._mode()
+        dlg.set_classes(f"mode-{mode}")
+
+    @on(Select.Changed, "#plot_save_mode")
+    def _on_mode_changed(self, event: Select.Changed) -> None:
+        # Use the message value: ``Select.value`` can still be the previous value
+        # during this handler on some Textual versions / focus paths.
+        mode = self._mode_str(event.value)
+        self._set_mode_class(mode)
+
+    def action_close_save(self) -> None:
+        self.app.pop_screen()
+
+    def action_quit_application(self) -> None:
+        self.app.exit()
+
+    @on(Button.Pressed, "#save_plot_btn")
+    def _on_save_pressed(self) -> None:
+        path = self.query_one("#save_filename", Input).value.strip()
+        if not path:
+            self.app.notify("Enter a filename", severity="warning", timeout=2)
+            return
+        mode = self._mode()
+        try:
+            if mode == "histogram":
+                try:
+                    bins = int(self.query_one("#save_bins", Input).value)
+                except ValueError:
+                    self.app.notify("Invalid bin count", severity="warning", timeout=2)
+                    return
+                bins = max(1, bins)
+                _save_1d_histogram_mpl(path, self._data, bins)
+            else:
+                lines = self.query_one("#line_lines", Checkbox).value
+                points = self.query_one("#line_points", Checkbox).value
+                smooth = self.query_one("#line_smooth", Checkbox).value
+                if not (lines or points or smooth):
+                    self.app.notify(
+                        "Select at least one of lines, points, or smooth",
+                        severity="warning",
+                        timeout=3,
+                    )
+                    return
+                _save_1d_lineplot_mpl(
+                    path,
+                    self._data,
+                    show_lines=lines,
+                    show_points=points,
+                    show_smooth=smooth,
+                )
+            self.app.notify(f"Saved to {path}", timeout=3)
+            self.app.pop_screen()
+        except OSError as e:
+            self.app.notify(f"Could not save: {e}", severity="error", timeout=8)
 
 
 def _cell_value_to_str(value: object) -> str:
@@ -297,24 +578,6 @@ def is_histogram_eligible(obj) -> bool:
         return False
     a = np.squeeze(np.asarray(obj))
     return a.ndim == 1 and np.issubdtype(a.dtype, np.number)
-
-
-def _plot_1d_histogram(plot_plt, data: np.ndarray) -> None:
-    """Draw a histogram of ``data`` (1D) using NumPy binning and Plotext ``bar``."""
-    vals = np.asarray(data, dtype=np.float64).ravel()
-    vals = vals[np.isfinite(vals)]
-    if vals.size == 0:
-        plot_plt.xlabel("Value")
-        plot_plt.ylabel("Count")
-        return
-    n = int(vals.size)
-    bins = min(40, max(10, int(np.sqrt(n))))
-    counts, edges = np.histogram(vals, bins=bins)
-    x = ((edges[:-1] + edges[1:]) / 2).tolist()
-    y = counts.astype(float).tolist()
-    plot_plt.bar(x, y, color="cyan")
-    plot_plt.xlabel("Value")
-    plot_plt.ylabel("Count")
 
 
 def _as_display_1d(arr: np.ndarray) -> np.ndarray:
@@ -594,6 +857,7 @@ class H5TUIApp(App):
         Binding("a", "view_attrs", "Attributes", show=True),
         Binding("p", "toggle_plot", "Plot", show=True),
         Binding("P", "toggle_plot_histogram", "Histogram", show=True),
+        Binding("s", "save_plot", "Save plot", show=True),
         Binding("A", "aggregate_data", "Aggregate", show=True),
         Binding("J", "scroll_preview_down", "Scroll preview", show=False),
         Binding("K", "scroll_preview_up", "Scroll preview", show=False),
@@ -624,6 +888,8 @@ class H5TUIApp(App):
         # Full header text while a dataset is open (used for aggregate; avoids broken
         # concatenation from Static.content / non-string renderables).
         self._dataset_detail_header = ""
+        # HDF5 path for the dataset opened in full view (basename used for save-as default).
+        self._open_dataset_path: str | None = None
 
     def on_unmount(self) -> None:
         self._file.close()
@@ -804,6 +1070,7 @@ class H5TUIApp(App):
         self.is_aggregated = False
         self._dataset_detail_header = ""
         self._data = None
+        self._open_dataset_path = None
         self._plot_histogram = False
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
@@ -895,6 +1162,7 @@ class H5TUIApp(App):
             return
 
         self._data = dset_data
+        self._open_dataset_path = path
 
         self.add_class("view-dataset")
         self.add_class("preview-maximized")
@@ -958,7 +1226,7 @@ class H5TUIApp(App):
         if action == "aggregate_data" and not self.has_class("view-dataset"):
             return False
         elif action in ("scroll_preview_down", "scroll_preview_up") and isinstance(
-            self.screen, AttributeScreen
+            self.screen, (AttributeScreen, SavePlotScreen)
         ):
             # AttributeScreen uses J/K to scroll attribute text.
             return False
@@ -982,7 +1250,7 @@ class H5TUIApp(App):
 
     def action_exit_dataset_view(self) -> None:
         """Leave full dataset / table / plot view and return focus to the file columns."""
-        if isinstance(self.screen, AttributeScreen):
+        if isinstance(self.screen, (AttributeScreen, SavePlotScreen)):
             return
         if self.has_class("view-plot") and not self.has_class("view-dataset"):
             self.remove_class("view-plot")
@@ -1001,6 +1269,9 @@ class H5TUIApp(App):
 
     def action_quit_contextual(self) -> None:
         """``q``: leave plot or dataset view if open; otherwise quit (file browser only)."""
+        if isinstance(self.screen, SavePlotScreen):
+            self.pop_screen()
+            return
         if self.has_class("view-plot"):
             self.remove_class("view-plot")
             self._plot_histogram = False
@@ -1033,6 +1304,48 @@ class H5TUIApp(App):
                     severity="warning",
                     timeout=2,
                 )
+
+    def _get_1d_save_plot_context(self) -> tuple[np.ndarray | None, str | None]:
+        """Return 1D numeric data and a short name for default ``{name}.pdf``, or ``(None, None)``."""
+        path: str | None = None
+        data_arr = None
+
+        if self.has_class("view-dataset"):
+            path = self._open_dataset_path
+            data_arr = self._data
+        elif self.has_class("view-plot") and self._data is not None:
+            path = self.get_selected_dataset_path()
+            data_arr = self._data
+        else:
+            path = self.get_selected_dataset_path()
+            if path is None:
+                return None, None
+            try:
+                data_arr = np.asarray(self._file[path][...])
+            except Exception:
+                return None, None
+
+        if data_arr is None:
+            return None, None
+        if not is_histogram_eligible(data_arr):
+            return None, None
+        base = (path or "plot").rstrip("/")
+        name = os.path.basename(base) or "plot"
+        return np.asarray(data_arr), name
+
+    def action_save_plot(self) -> None:
+        """Open save dialog for 1D numeric data (``s``)."""
+        if isinstance(self.screen, (AttributeScreen, SavePlotScreen)):
+            return
+        data, name = self._get_1d_save_plot_context()
+        if data is None or name is None:
+            self.notify(
+                "Select or open a 1D numeric dataset to save as a plot",
+                severity="warning",
+                timeout=3,
+            )
+            return
+        self.push_screen(SavePlotScreen(data, name))
 
     def action_aggregate_data(self):
         if self.has_class("view-dataset"):

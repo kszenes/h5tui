@@ -11,7 +11,9 @@ dependencies = [
   "textual_plotext",
   "h5py",
   "numpy",
-  "pandas"
+  "pandas",
+  "matplotlib",
+  "scipy",
 ]
 authors = [
   {name = "Kalman Szenes", email =  "szenes.kalman@gmail.com"}
@@ -37,3 +39,13 @@ universal = true
 include-package-data = true
 [tool.setuptools.dynamic]
 version = {attr = "h5tui.__version__"}
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7",
+  "pytest-asyncio>=0.23",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

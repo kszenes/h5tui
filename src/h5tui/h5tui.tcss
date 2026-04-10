@@ -34,7 +34,9 @@ OptionList#dirs-current .option-list--option {
   padding: 0;
 }
 
-OptionList {
+/* Only our OptionLists — not Textual's SelectOverlay (subclass of OptionList),
+   which must keep height: auto + overlay: screen for a real dropdown. */
+MyOptionList {
   height: 1fr;
   min-height: 5;
 }
@@ -131,15 +133,24 @@ Toast {
 AttributeScreen {
   align: center middle;
 }
+
+/* Modal shells: identical outer size for attributes and save-plot. */
+AttributeScreen #dialog,
+SavePlotScreen #save-plot-dialog {
+  width: 70%;
+  max-width: 96;
+  min-width: 68;
+  height: 68%;
+  max-height: 78%;
+  border: thick $background 80%;
+  background: $surface;
+  padding: 1 2;
+}
+
 #dialog {
-    grid-size: 2;
-    grid-gutter: 1 2;
-    grid-rows: 1fr 3;
-    padding: 0 1;
-    width: 80%;
-    height: 80%;
-    border: thick $background 80%;
-    background: $surface;
+  grid-size: 2;
+  grid-gutter: 1 2;
+  grid-rows: 1fr 3;
 }
 #attr_title {
     column-span: 2;
@@ -160,4 +171,141 @@ AttributeScreen {
   background: $panel;
   margin: 0 0;
   padding: 0 1;
+}
+
+SavePlotScreen {
+  align: center middle;
+}
+
+/* VerticalGroup + HorizontalGroup: shrink-wrap (default Vertical/Horizontal are 1fr tall). */
+#save-plot-dialog {
+  align: left top;
+}
+
+#save-plot-dialog.mode-lineplot .hist-opts {
+  display: none;
+}
+
+#save-plot-dialog.mode-histogram .line-opts {
+  display: none;
+}
+
+#save_plot_title {
+  margin: 0 0 1 0;
+  text-style: bold;
+}
+
+/* Match file-tree vibe: subtle rule when idle, stronger when focused (cf. dirs-parent vs current). */
+#save-plot-dialog Select {
+  width: 100%;
+  height: auto;
+  min-height: 3;
+  margin: 0 0 1 0;
+}
+
+#save-plot-dialog Select > SelectCurrent {
+  border: tall $foreground 12%;
+  background: $panel;
+}
+
+#save-plot-dialog Select > SelectCurrent Static#label {
+  content-align: center middle;
+}
+
+#save-plot-dialog Select:focus > SelectCurrent {
+  border: tall $foreground 45%;
+  background-tint: $foreground 6%;
+}
+
+#save-plot-dialog .hist-opts,
+#save-plot-dialog .line-opts {
+  width: 100%;
+  height: auto;
+  min-height: 3;
+  margin: 0 0 1 0;
+  border: tall $foreground 12%;
+  background: $panel;
+  padding: 0 1;
+}
+
+#save-plot-dialog .hist-opts:focus-within,
+#save-plot-dialog .line-opts:focus-within {
+  border: tall $foreground 45%;
+  background-tint: $foreground 4%;
+}
+
+#save-plot-dialog .hist-opts Label {
+  content-align: center middle;
+  width: auto;
+  margin: 0 1 0 0;
+}
+
+#save-plot-dialog .line-opts Checkbox {
+  width: 1fr;
+  content-align: center middle;
+}
+
+/* ToggleButton defaults use block-cursor colors on focus — unreadable on dark panels. */
+#save-plot-dialog Checkbox:focus > .toggle--label {
+  color: $foreground;
+  background: transparent;
+  text-style: none;
+}
+
+#save_bins {
+  width: 1fr;
+  height: 3;
+  min-height: 3;
+  border: tall $foreground 12%;
+  background: $panel;
+}
+
+#save_bins:focus {
+  border: tall $foreground 45%;
+  background-tint: $foreground 6%;
+}
+
+#save_filename {
+  width: 100%;
+  height: 3;
+  min-height: 3;
+  margin: 1 0 1 0;
+  border: tall $foreground 12%;
+  background: $panel;
+  border-title-align: left;
+}
+
+#save_filename:focus {
+  border: tall $foreground 45%;
+  background-tint: $foreground 6%;
+}
+
+#save-plot-dialog .save-plot-actions {
+  width: 100%;
+  height: auto;
+  min-height: 3;
+  margin: 0;
+}
+
+#save-plot-dialog .save-plot-actions Checkbox {
+  width: auto;
+  margin: 0 0 0 1;
+}
+
+#save_plot_btn {
+  width: 100%;
+  height: 3;
+  min-height: 3;
+  max-height: 3;
+  margin: 0;
+  border: tall $foreground 12%;
+}
+
+#save-plot-dialog .save-plot-actions #save_plot_btn {
+  width: 1fr;
+}
+
+#save_plot_btn:focus {
+  border: tall $foreground 45%;
+  background-tint: $foreground 8%;
 }
