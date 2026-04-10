@@ -2584,7 +2584,11 @@ class H5TUIApp(App):
     def action_goto_parent(self) -> None:
         """Either displays parent or hides dataset"""
         has_parent_dir = self._cur_dir != "/"
-        if has_parent_dir and not self.has_class("view-dataset"):
+        if not has_parent_dir:
+            # At file root there is no parent group; do not navigate or clear views
+            # (including browse-mode plot in the preview, which uses view-plot without view-dataset).
+            return
+        if not self.has_class("view-dataset"):
             self._cur_dir = os.path.dirname(self._cur_dir)
             self.update_header(self._header_content(self._cur_dir))
             self.refresh_current_column(self._prev_highlighted)
