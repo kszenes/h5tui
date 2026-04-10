@@ -1,4 +1,4 @@
-from textual import on
+from textual import on, _widget_navigation
 from textual.app import App, ComposeResult
 from textual.events import Resize
 from textual.reactive import Reactive
@@ -1597,11 +1597,25 @@ class MyOptionList(OptionList):
 
     def action_cursor_down(self) -> None:
         self.refresh_bindings()
-        return super().action_cursor_down()
+        next_h = _widget_navigation.find_next_enabled_no_wrap(
+            self.options,
+            anchor=self.highlighted,
+            direction=1,
+            with_anchor=False,
+        )
+        if next_h is not None:
+            self.highlighted = next_h
 
     def action_cursor_up(self) -> None:
         self.refresh_bindings()
-        return super().action_cursor_up()
+        next_h = _widget_navigation.find_next_enabled_no_wrap(
+            self.options,
+            anchor=self.highlighted,
+            direction=-1,
+            with_anchor=False,
+        )
+        if next_h is not None:
+            self.highlighted = next_h
 
     def check_action(self, action, parameters):
         if action in ["cursor_down", "cursor_up"] and self.app.has_class(
@@ -1806,7 +1820,10 @@ class H5TUIApp(App):
 
         self._cur_dir = str(self._file.name)
 
-        self._prev_highlighted = 0
+        # One index per descent into a group (keyboard ``l``): used to restore the
+        # highlighted row in each ancestor when backing out with ``h``. Cleared when
+        # the path jumps via the Parent column (arbitrary branch).
+        self._browse_highlight_stack: list[int] = []
         self._preview_line_width = _ND_LINEWIDTH_DEFAULT
         self._data = None
 
@@ -2152,7 +2169,7 @@ class H5TUIApp(App):
             if new_dir == self._cur_dir:
                 return
             self._cur_dir = new_dir
-            self._prev_highlighted = 0
+            self._browse_highlight_stack.clear()
             self._clear_detail_view_state()
             self.refresh_current_column(0)
             self.refresh_parent_column()
@@ -2697,6 +2714,8 @@ class H5TUIApp(App):
             self._plot_histogram = True
             if not self.has_class("view-plot"):
                 self.notify("Histogram…", timeout=1.5)
+            # Drop browse snapshot layout or its rules override .view-plot (higher specificity).
+            self._preview.remove_class("browse-preview-table")
             self.add_class("view-plot")
             self._preview.replot()
             self._current_list.focus()
@@ -2712,6 +2731,7 @@ class H5TUIApp(App):
         self._plot_histogram = False
         self._data = dset_data
         self.notify("Plotting...", timeout=2)
+        self._preview.remove_class("browse-preview-table")
         self.add_class("view-plot")
         self._preview.replot()
         self._current_list.focus()
@@ -2842,7 +2862,12 @@ class H5TUIApp(App):
         if not self.has_class("view-dataset"):
             self._cur_dir = os.path.dirname(self._cur_dir)
             self.update_header(self._header_content(self._cur_dir))
-            self.refresh_current_column(self._prev_highlighted)
+            prev = (
+                self._browse_highlight_stack.pop()
+                if self._browse_highlight_stack
+                else 0
+            )
+            self.refresh_current_column(prev)
             self.refresh_parent_column()
         self._clear_detail_view_state()
         self._current_list.focus()
@@ -2889,7 +2914,8 @@ class H5TUIApp(App):
                     )
                 else:
                     if isinstance(node, h5py.Group):
-                        self._prev_highlighted = highlighted
+                        hi = highlighted if highlighted is not None else 0
+                        self._browse_highlight_stack.append(hi)
                         self._cur_dir = path
                         self.update_header(self._header_content(self._cur_dir))
                         self.refresh_current_column(0)
