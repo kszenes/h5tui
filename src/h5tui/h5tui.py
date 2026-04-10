@@ -858,6 +858,26 @@ def is_plain_1d_array(arr: np.ndarray) -> bool:
 MAX_TABLE_ELEMENTS = 200_000
 MAX_TABLE_COLUMNS = 1024
 
+# Double-confirm before full-array ops: max element count without a second keypress.
+# Tuned by cost: terminal line/2D plot is heaviest; 1D histogram bins are lighter;
+# summary is NumPy-only (no plotext) and tolerates much larger n.
+_LARGE_PLOT_ELEMENT_THRESHOLD = 500_000
+_LARGE_HISTOGRAM_ELEMENT_THRESHOLD = 3_000_000
+_LARGE_AGGREGATE_ELEMENT_THRESHOLD = 10_000_000
+# Double-press confirm window: ``App.notify`` timeout and ``set_timer`` (message pump).
+_LARGE_CONFIRM_WINDOW_SEC = 4.0
+
+
+def _dataset_path_element_count(h5file: h5py.File, path: str) -> int | None:
+    """HDF5 element count without reading array data."""
+    try:
+        node = h5file[path]
+        if isinstance(node, h5py.Dataset):
+            return int(node.size)
+    except Exception:
+        pass
+    return None
+
 
 def should_use_1d_table(arr) -> bool:
     """Use a labeled-row DataTable (index + value column) for plain 1D data."""
@@ -1145,8 +1165,12 @@ class H5TUIApp(App):
         self._plot_histogram = False
         # HDF5 path for the dataset opened in full view (basename used for save-as default).
         self._open_dataset_path: str | None = None
+        # Large-dataset double-confirm: same key as ``_large_op_arm`` + second press runs op.
+        self._large_op_arm: tuple | None = None
+        self._large_confirm_timer = None
 
     def on_unmount(self) -> None:
+        self._cancel_large_confirm_timer()
         self._file.close()
 
     def _header_content(
@@ -1513,7 +1537,8 @@ class H5TUIApp(App):
 
     def check_action(self, action, parameters):
         if action in ("scroll_preview_down", "scroll_preview_up") and isinstance(
-            self.screen, (AttributeScreen, SavePlotScreen, DatasetSummaryScreen)
+            self.screen,
+            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen),
         ):
             # Attribute/save/summary modals use J/K for inner scroll.
             return False
@@ -1538,7 +1563,8 @@ class H5TUIApp(App):
     def action_exit_dataset_view(self) -> None:
         """Leave full dataset / table / plot view and return focus to the file columns."""
         if isinstance(
-            self.screen, (AttributeScreen, SavePlotScreen, DatasetSummaryScreen)
+            self.screen,
+            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen),
         ):
             return
         if self.has_class("view-plot") and not self.has_class("view-dataset"):
@@ -1637,10 +1663,123 @@ class H5TUIApp(App):
         except Exception:
             return None
 
+    def _preview_aggregate_element_count(self) -> int | None:
+        """Element count for summary guard (uses dataset metadata when not yet loaded)."""
+        if self.has_class("view-dataset"):
+            d = self._data
+            return None if d is None else int(np.asarray(d).size)
+        if self.has_class("view-plot") and self._data is not None:
+            return int(np.asarray(self._data).size)
+        path = self.get_selected_dataset_path()
+        if path is None:
+            return None
+        return _dataset_path_element_count(self._file, path)
+
+    def _h5_path_is_plain_numeric_dataset(self, path: str) -> bool:
+        """Whether ``path`` is a non-record numeric dataset suitable for summary (no array read)."""
+        try:
+            node = self._file[path]
+        except Exception:
+            return False
+        if not isinstance(node, h5py.Dataset):
+            return False
+        if node.dtype.fields is not None:
+            return False
+        return np.issubdtype(node.dtype, np.number) and node.size > 1
+
+    def _summary_large_confirm_key(self) -> str | None:
+        """HDF5 path identifying the dataset for summary double-confirm."""
+        if self.has_class("view-dataset"):
+            return self._open_dataset_path
+        return self.get_selected_dataset_path()
+
+    def _cancel_large_confirm_timer(self) -> None:
+        t = self._large_confirm_timer
+        if t is not None:
+            t.stop()
+            self._large_confirm_timer = None
+
+    def _expire_large_confirm_arm(self) -> None:
+        """Clear arm when ``set_timer`` fires (see Textual ``MessagePump.set_timer``)."""
+        self._large_confirm_timer = None
+        self._large_op_arm = None
+
+    def _with_large_dataset_confirm(
+        self, arm_key: tuple, n: int, element_threshold: int, run
+    ) -> None:
+        """Run immediately when ``n`` is at or below ``element_threshold``; else double-press.
+
+        Uses Textual's ``App.notify`` (toast) and ``set_timer`` on the message pump to
+        expire the armed state—see ``MessagePump.set_timer`` in the Textual docs.
+        """
+        if int(n) <= element_threshold:
+            self._cancel_large_confirm_timer()
+            self._large_op_arm = None
+            run()
+            return
+        if self._large_op_arm == arm_key:
+            self._cancel_large_confirm_timer()
+            self._large_op_arm = None
+            run()
+            return
+        self._cancel_large_confirm_timer()
+        self._large_op_arm = arm_key
+        self._large_confirm_timer = self.set_timer(
+            _LARGE_CONFIRM_WINDOW_SEC,
+            self._expire_large_confirm_arm,
+            name="large_dataset_confirm",
+        )
+        self.notify(
+            "Warning: large dataset, may be slow. Press again to confirm.",
+            severity="warning",
+            timeout=_LARGE_CONFIRM_WINDOW_SEC + 1.0,
+        )
+
+    def _start_plot_preview_from_path(self, path: str, *, histogram: bool) -> None:
+        """Load dataset from ``path`` and show plot pane (browse mode)."""
+        try:
+            dset_data = np.asarray(self._file[path][...])
+        except Exception as e:
+            self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+            return
+        if histogram:
+            self._data = dset_data
+            if not is_histogram_eligible(self._data):
+                self._data = None
+                self.notify(
+                    "Histogram is only available for 1D numeric datasets",
+                    severity="warning",
+                    timeout=2,
+                )
+                return
+            self._plot_histogram = True
+            if not self.has_class("view-plot"):
+                self.notify("Histogram…", timeout=1.5)
+            self.add_class("view-plot")
+            self._preview.replot()
+            self._current_list.focus()
+            self.refresh_bindings()
+            return
+        if not is_plotable(dset_data):
+            self.notify(
+                "Only 1D and 2D numeric data can be plotted",
+                severity="warning",
+                timeout=2,
+            )
+            return
+        self._plot_histogram = False
+        self._data = dset_data
+        self.notify("Plotting...", timeout=2)
+        self.add_class("view-plot")
+        self._preview.replot()
+        self._current_list.focus()
+        self.refresh_bindings()
+
     def action_save_plot(self) -> None:
         """Open save dialog for 1D numeric data (``s``)."""
         if isinstance(
-            self.screen, (AttributeScreen, SavePlotScreen, DatasetSummaryScreen)
+            self.screen,
+            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen),
         ):
             return
         data, name = self._get_1d_save_plot_context()
@@ -1656,18 +1795,55 @@ class H5TUIApp(App):
     def action_aggregate_data(self) -> None:
         """Open dataset summary modal (``A``): numeric stats in a card grid."""
         if isinstance(
-            self.screen, (AttributeScreen, SavePlotScreen, DatasetSummaryScreen)
+            self.screen,
+            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen),
         ):
             return
-        data = self._get_aggregate_data_context()
-        if data is None or not is_aggregatable(data):
+        n = self._preview_aggregate_element_count()
+        if n is None:
             self.notify(
                 "Select or open a numeric dataset to summarize",
                 severity="warning",
                 timeout=3,
             )
             return
-        self.push_screen(DatasetSummaryScreen(data))
+        if self.has_class("view-dataset") or (
+            self.has_class("view-plot") and self._data is not None
+        ):
+            data = self._get_aggregate_data_context()
+            if data is None or not is_aggregatable(data):
+                self.notify(
+                    "Select or open a numeric dataset to summarize",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+        else:
+            path = self.get_selected_dataset_path()
+            if path is None or not self._h5_path_is_plain_numeric_dataset(path):
+                self.notify(
+                    "Select or open a numeric dataset to summarize",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+
+        summary_key = self._summary_large_confirm_key()
+        if summary_key is None:
+            return
+
+        def _open_summary() -> None:
+            data = self._get_aggregate_data_context()
+            if data is None or not is_aggregatable(data):
+                return
+            self.push_screen(DatasetSummaryScreen(data))
+
+        self._with_large_dataset_confirm(
+            ("summary", summary_key),
+            n,
+            _LARGE_AGGREGATE_ELEMENT_THRESHOLD,
+            _open_summary,
+        )
 
     def action_toggle_dark(self) -> None:
         """Switch between Nord (dark) and Catppuccin Latte (light)."""
@@ -1738,11 +1914,32 @@ class H5TUIApp(App):
 
     def action_toggle_plot(self):
         if self.has_class("view-dataset"):
-            if is_plotable(self._data):
-                opening = not self.has_class("view-plot")
-                if opening:
+            if not is_plotable(self._data):
+                self.notify(
+                    "Currently only 1D and 2D data is plotable", severity="warning"
+                )
+                return
+            opening = not self.has_class("view-plot")
+            if opening:
+                n = int(np.asarray(self._data).size)
+
+                def do_open():
                     self._plot_histogram = False
                     self.notify("Plotting...", timeout=2)
+                    self.toggle_class("view-plot")
+                    self._preview.replot()
+
+                vk = self._open_dataset_path
+                if vk is None:
+                    return
+                self._with_large_dataset_confirm(
+                    ("plot", "view", vk),
+                    n,
+                    _LARGE_PLOT_ELEMENT_THRESHOLD,
+                    do_open,
+                )
+            else:
+                self._plot_histogram = False
                 self.toggle_class("view-plot")
                 self._preview.replot()
                 if not self.has_class("view-plot"):
@@ -1751,10 +1948,6 @@ class H5TUIApp(App):
                         self._preview._df.focus()
                     else:
                         self._preview.focus()
-            else:
-                self.notify(
-                    "Currently only 1D and 2D data is plotable", severity="warning"
-                )
             return
 
         # Browse mode: plot the selected dataset without opening full preview (``l``).
@@ -1775,26 +1968,17 @@ class H5TUIApp(App):
                 timeout=2,
             )
             return
-        try:
-            dset_data = np.asarray(self._file[path][...])
-        except Exception as e:
-            self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+        n = _dataset_path_element_count(self._file, path)
+        if n is None:
+            self._start_plot_preview_from_path(path, histogram=False)
             return
-        if not is_plotable(dset_data):
-            self.notify(
-                "Only 1D and 2D numeric data can be plotted",
-                severity="warning",
-                timeout=2,
-            )
-            return
-        self._plot_histogram = False
-        self._data = dset_data
-        self.notify("Plotting...", timeout=2)
-        self.add_class("view-plot")
-        self._preview.replot()
-        # Keep focus on the file list so j/k and arrows still change selection.
-        self._current_list.focus()
-        self.refresh_bindings()
+
+        self._with_large_dataset_confirm(
+            ("plot", "browse", path),
+            n,
+            _LARGE_PLOT_ELEMENT_THRESHOLD,
+            lambda: self._start_plot_preview_from_path(path, histogram=False),
+        )
 
     def action_toggle_plot_histogram(self) -> None:
         """Show a value histogram for 1D numeric data (``P``)."""
@@ -1806,12 +1990,29 @@ class H5TUIApp(App):
                     timeout=2,
                 )
                 return
-            self._plot_histogram = True
-            if not self.has_class("view-plot"):
+            if self.has_class("view-plot"):
+                self._plot_histogram = True
+                self._preview.replot()
+                self._preview.focus()
+                return
+            n = int(np.asarray(self._data).size)
+
+            def do_hist():
+                self._plot_histogram = True
                 self.notify("Histogram…", timeout=1.5)
                 self.add_class("view-plot")
-            self._preview.replot()
-            self._preview.focus()
+                self._preview.replot()
+                self._preview.focus()
+
+            vk = self._open_dataset_path
+            if vk is None:
+                return
+            self._with_large_dataset_confirm(
+                ("hist", "view", vk),
+                n,
+                _LARGE_HISTOGRAM_ELEMENT_THRESHOLD,
+                do_hist,
+            )
             return
 
         path = self.get_selected_dataset_path()
@@ -1822,27 +2023,17 @@ class H5TUIApp(App):
                 timeout=2,
             )
             return
-        try:
-            dset_data = np.asarray(self._file[path][...])
-        except Exception as e:
-            self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+        n = _dataset_path_element_count(self._file, path)
+        if n is None:
+            self._start_plot_preview_from_path(path, histogram=True)
             return
-        self._data = dset_data
-        if not is_histogram_eligible(self._data):
-            self._data = None
-            self.notify(
-                "Histogram is only available for 1D numeric datasets",
-                severity="warning",
-                timeout=2,
-            )
-            return
-        self._plot_histogram = True
-        if not self.has_class("view-plot"):
-            self.notify("Histogram…", timeout=1.5)
-        self.add_class("view-plot")
-        self._preview.replot()
-        self._current_list.focus()
-        self.refresh_bindings()
+
+        self._with_large_dataset_confirm(
+            ("hist", "browse", path),
+            n,
+            _LARGE_HISTOGRAM_ELEMENT_THRESHOLD,
+            lambda: self._start_plot_preview_from_path(path, histogram=True),
+        )
 
 
 def check_file_validity(fname):
