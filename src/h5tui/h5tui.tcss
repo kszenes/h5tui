@@ -103,6 +103,27 @@ MyOptionList {
   display: block;
 }
 
+/* Browse sidebar: metadata (#data) stacked above snapshot DataTable (#dtable). */
+#content.browse-preview-table {
+  /* Do not vertically scroll the shell: it clips the DataTable, hiding row labels
+     and slicing the last row. Scrolling is unnecessary for the small snapshot. */
+  overflow-y: hidden;
+}
+#content.browse-preview-table #plot {
+  display: none;
+}
+#content.browse-preview-table #data {
+  display: block;
+  height: auto;
+  min-height: 0;
+}
+#content.browse-preview-table #dtable {
+  display: block;
+  dock: initial;
+  height: auto;
+  width: 100%;
+}
+
 /* Plot must come after .view-dtable so p toggles plot even when the dataset uses a DataTable. */
 .view-plot #data {
   display: none;

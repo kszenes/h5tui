@@ -1212,6 +1212,67 @@ LAZY_DATATABLE_WINDOW_SIZE = 300
 LAZY_2D_WINDOW_ROWS = 120
 LAZY_2D_WINDOW_COLS = 120
 
+# Browse-mode snapshot table (sidebar preview before pressing ``l``).
+PREVIEW_TABLE_1D_ROWS = 25
+PREVIEW_TABLE_2D_SIZE = 8
+_PREVIEW_ELLIPSIS = "…"
+
+
+def _browse_preview_plain_datatable_eligible(dset: h5py.Dataset) -> bool:
+    """Plain 1D/2D arrays we show as a small DataTable in the browse preview."""
+    if dset.size == 0:
+        return False
+    if len(dset.dtype) != 0 or dset.dtype == np.dtype("O"):
+        return False
+    return dset.ndim in (1, 2)
+
+
+def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> None:
+    """Fill browse preview: up to ``PREVIEW_TABLE_1D_ROWS`` / ``PREVIEW_TABLE_2D_SIZE`` with edge ``…``."""
+    if dset.ndim == 1:
+        n = int(dset.shape[0])
+        m = min(PREVIEW_TABLE_1D_ROWS, n)
+        chunk = np.asarray(dset[:m])
+        a = _as_display_1d(chunk)
+        table.clear(columns=True)
+        table.add_columns("")
+        for i in range(int(a.shape[0])):
+            table.add_row(_format_1d_value_display(a[i]), label=str(i))
+        if n > PREVIEW_TABLE_1D_ROWS:
+            table.add_row(_PREVIEW_ELLIPSIS, label=_PREVIEW_ELLIPSIS)
+        return
+
+    if dset.ndim == 2:
+        r, c = int(dset.shape[0]), int(dset.shape[1])
+        if min(r, c) == 1:
+            if c == 1:
+                vec = dset[:, 0]
+            else:
+                vec = dset[0, :]
+            fill_browse_preview_datatable(vec, table)
+            return
+        br = min(PREVIEW_TABLE_2D_SIZE, r)
+        bc = min(PREVIEW_TABLE_2D_SIZE, c)
+        arr = np.asarray(dset[:br, :bc])
+        nrows, ncols = int(arr.shape[0]), int(arr.shape[1])
+        table.clear(columns=True)
+        col_labels = [str(j) for j in range(ncols)]
+        if c > bc:
+            col_labels.append(_PREVIEW_ELLIPSIS)
+        table.add_columns(*col_labels)
+        for i in range(nrows):
+            row = arr[i]
+            cells = tuple(_format_table_cell(row[j]) for j in range(ncols))
+            if c > bc:
+                cells = cells + (_PREVIEW_ELLIPSIS,)
+            table.add_row(*cells, label=str(i))
+        if r > br:
+            ell_cols = ncols + (1 if c > bc else 0)
+            table.add_row(*((_PREVIEW_ELLIPSIS,) * ell_cols), label=_PREVIEW_ELLIPSIS)
+        return
+
+    raise ValueError("browse preview table only supports 1D/2D")
+
 
 def _dataset_path_element_count(h5file: h5py.File, path: str) -> int | None:
     """HDF5 element count without reading array data."""
@@ -1553,6 +1614,13 @@ class MyOptionList(OptionList):
 
 class ColumnContent(VerticalScroll):
     """Column which displays a dataset"""
+
+    @property
+    def allow_vertical_scroll(self) -> bool:
+        """Disable outer scroll for browse DataTable preview — avoids clipping labels/rows."""
+        if self.has_class("browse-preview-table"):
+            return False
+        return super().allow_vertical_scroll
 
     BINDINGS = [
         Binding("down,j", "scroll_down", "Down", show=True),
@@ -1936,8 +2004,8 @@ class H5TUIApp(App):
         else:
             self._current_list.highlighted = min(prev_highlighted, n - 1)
 
-    def _dataset_preview_block(self, dset: h5py.Dataset) -> str:
-        lw = int(self._preview_line_width)
+    def _dataset_preview_metadata_block(self, dset: h5py.Dataset) -> str:
+        """Shape / dtype / size / compression and a trailing blank line (no array body)."""
         cd = _dataset_compression_detail(dset)
         lines = [
             f"shape: {dset.shape}",
@@ -1947,6 +2015,11 @@ class H5TUIApp(App):
         if cd:
             lines.append(f"compression: {cd}")
         lines.append("")
+        return "\n".join(lines)
+
+    def _dataset_preview_block(self, dset: h5py.Dataset) -> str:
+        lw = int(self._preview_line_width)
+        lines = [self._dataset_preview_metadata_block(dset)]
         if dset.size == 0:
             lines.append("(empty)")
             return "\n".join(lines)
@@ -2000,6 +2073,7 @@ class H5TUIApp(App):
         self.remove_class("view-plot")
         self.remove_class("view-dtable")
         self.remove_class("preview-maximized")
+        self._preview.remove_class("browse-preview-table")
 
     def refresh_preview(self) -> None:
         """Update the preview pane from the Current column selection (browse mode)."""
@@ -2010,6 +2084,7 @@ class H5TUIApp(App):
             self._plot_histogram = False
             self._data = None
         self._preview.remove_class("empty-group-preview")
+        self._preview.remove_class("browse-preview-table")
         name = self.get_selected_itemname()
         if name is None:
             self._preview._content.update("(empty directory)")
@@ -2039,7 +2114,25 @@ class H5TUIApp(App):
                     text += f"\n… ({more} more)"
                 self._preview._content.update(text)
         elif isinstance(node, h5py.Dataset):
-            self._preview._content.update(self._dataset_preview_block(node))
+            if _browse_preview_plain_datatable_eligible(node):
+                self._preview.add_class("browse-preview-table")
+                self._preview._content.update(
+                    self._dataset_preview_metadata_block(node)
+                )
+                try:
+                    fill_browse_preview_datatable(node, self._preview._df)
+                    self._preview.scroll_x = 0
+                    self._preview.scroll_y = 0
+                    self._preview._df.scroll_x = 0
+                    self._preview._df.scroll_y = 0
+                except Exception as e:
+                    self._preview.remove_class("browse-preview-table")
+                    self._preview._content.update(
+                        self._dataset_preview_metadata_block(node)
+                        + f"(could not read data: {e})"
+                    )
+            else:
+                self._preview._content.update(self._dataset_preview_block(node))
 
     def on_option_list_option_highlighted(
         self, event: OptionList.OptionHighlighted
@@ -2075,6 +2168,7 @@ class H5TUIApp(App):
             self.refresh_preview()
 
     def update_content(self, path):
+        self._preview.remove_class("browse-preview-table")
         self._preview.remove_class("empty-group-preview")
         self.remove_class("view-plot")
         self._plot_histogram = False
