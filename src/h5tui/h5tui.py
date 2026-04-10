@@ -1177,9 +1177,13 @@ def is_dataframe(obj):
 
 
 def is_plotable(obj):
-    is_not_composity_type = len(obj.dtype) == 0
-    squeezed = np.squeeze(obj)
-    return is_not_composity_type and (squeezed.ndim == 1 or squeezed.ndim == 2)
+    """1D/2D numeric plots; exclude structured dtypes and ``object`` (e.g. string arrays)."""
+    squeezed = np.squeeze(np.asarray(obj))
+    if squeezed.dtype.fields is not None:
+        return False
+    if squeezed.dtype == np.dtype("O"):
+        return False
+    return squeezed.ndim == 1 or squeezed.ndim == 2
 
 
 def is_aggregatable(obj):
@@ -1207,10 +1211,10 @@ def _as_display_1d(arr: np.ndarray) -> np.ndarray:
 
 
 def is_plain_1d_array(arr: np.ndarray) -> bool:
-    """Non-record 1D arrays we show as one line per index (exclude object arrays)."""
+    """Non-record 1D arrays: plain dtypes, fixed strings, or ``object`` (vlen strings)."""
     if not isinstance(arr, np.ndarray) or arr.ndim != 1:
         return False
-    return arr.dtype.fields is None and arr.dtype != np.dtype("O")
+    return arr.dtype.fields is None
 
 
 # Plain ndarray DataTable limits (text fallback beyond these).
@@ -1249,11 +1253,11 @@ _PREVIEW_ELLIPSIS = "…"
 
 
 def _browse_preview_datatable_eligible(dset: h5py.Dataset) -> bool:
-    """Datasets we show as a small browse DataTable: plain 1D/2D or 1D compound (structured)."""
+    """Datasets we show as a small browse DataTable: plain 1D/2D, object string 1D/2D, or 1D compound."""
     if dset.size == 0:
         return False
     if dset.dtype == np.dtype("O"):
-        return False
+        return dset.ndim in (1, 2)
     if dset.dtype.fields is not None:
         return (
             dset.ndim == 1
@@ -1334,7 +1338,9 @@ def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> Non
             table.add_row(*((_PREVIEW_ELLIPSIS,) * ell_cols), label=_PREVIEW_ELLIPSIS)
         return
 
-    raise ValueError("browse preview table only supports plain 1D/2D and compound 1D")
+    raise ValueError(
+        "browse preview table only supports plain 1D/2D, object 1D/2D, and compound 1D"
+    )
 
 
 def _dataset_path_element_count(h5file: h5py.File, path: str) -> int | None:
@@ -1355,10 +1361,10 @@ def should_use_1d_table(arr) -> bool:
 
 
 def is_plain_2d_array(arr: np.ndarray) -> bool:
-    """Non-record 2D arrays (exclude object dtype)."""
+    """Non-record 2D arrays (numeric, fixed/object string grids)."""
     if not isinstance(arr, np.ndarray) or arr.ndim != 2:
         return False
-    return arr.dtype.fields is None and arr.dtype != np.dtype("O")
+    return arr.dtype.fields is None
 
 
 def should_use_2d_table(arr) -> bool:
@@ -1422,6 +1428,10 @@ def _format_table_cell(v) -> str:
     Integers and bools use a fast path. Real/complex scalars go through
     ``array2string`` for consistent NumPy-style text output.
     """
+    if isinstance(v, (bytes, bytearray)):
+        return bytes(v).decode("utf-8", errors="replace")
+    if isinstance(v, str):
+        return v
     x = np.asarray(v)
     if x.dtype.names is not None or x.dtype == np.dtype("O"):
         return _format_array_element(v)
@@ -1443,6 +1453,10 @@ def _format_table_cell(v) -> str:
 
 def _format_1d_value_display(v: object) -> str:
     """Format one scalar for 1D table/preview: space before positive signs (column alignment)."""
+    if isinstance(v, (bytes, bytearray)):
+        return bytes(v).decode("utf-8", errors="replace")
+    if isinstance(v, str):
+        return v
     x = np.asarray(v)
     if x.dtype.names is not None or x.dtype == np.dtype("O"):
         return _format_array_element(v)
