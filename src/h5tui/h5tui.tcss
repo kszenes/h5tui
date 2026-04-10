@@ -130,12 +130,14 @@ Toast {
   margin: 0;
 }
 
-AttributeScreen {
+AttributeScreen,
+DatasetSummaryScreen {
   align: center middle;
 }
 
-/* Modal shells: identical outer size for attributes and save-plot. */
+/* Modal shells: identical outer size for attributes, summary, and save-plot. */
 AttributeScreen #dialog,
+DatasetSummaryScreen #summary_dialog,
 SavePlotScreen #save-plot-dialog {
   width: 70%;
   max-width: 96;
@@ -145,6 +147,43 @@ SavePlotScreen #save-plot-dialog {
   border: thick $background 80%;
   background: $surface;
   padding: 1 2;
+}
+
+DatasetSummaryScreen #summary_modal_title {
+  text-style: bold;
+  content-align: center middle;
+  margin: 0 0 1 0;
+}
+
+DatasetSummaryScreen #summary_stat_scroll {
+  height: 1fr;
+  min-height: 6;
+}
+
+DatasetSummaryScreen #summary_stat_grid {
+  height: auto;
+  width: 100%;
+  layout: vertical;
+}
+
+DatasetSummaryScreen .summary-stat-row {
+  width: 100%;
+  height: auto;
+  layout: horizontal;
+}
+
+DatasetSummaryScreen .summary-stat-box {
+  width: 1fr;
+  height: auto;
+  /* Narrow enough for four cards across on small modals (avoids clipping Min). */
+  min-width: 8;
+  border: tall $secondary;
+  border-title-align: center;
+  border-title-style: bold;
+  border-title-color: $accent;
+  background: $panel;
+  padding: 0 1 1 1;
+  margin: 0 1 1 0;
 }
 
 #dialog {

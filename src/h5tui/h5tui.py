@@ -23,7 +23,9 @@ from textual.containers import (
 )
 from textual.binding import Binding
 from textual.screen import ModalScreen
+from textual.content import Content
 from textual_plotext import PlotextPlot
+from rich.markup import escape
 from rich.text import Text
 
 import h5py
@@ -401,6 +403,97 @@ class SavePlotScreen(ModalScreen):
             self.app.pop_screen()
         except OSError as e:
             self.app.notify(f"Could not save: {e}", severity="error", timeout=8)
+
+
+def _format_stat_index(arr: np.ndarray, flat_index: int) -> str:
+    """Human-readable multi-index for ``flat_index`` into ``arr`` (cf. ``argmax`` / ``argmin``)."""
+    t = np.unravel_index(int(flat_index), arr.shape)
+    if len(t) == 1:
+        return str(int(t[0]))
+    return "(" + ", ".join(str(int(x)) for x in t) + ")"
+
+
+class DatasetSummaryScreen(ModalScreen):
+    """Modal stat cards: border title + value ``Static`` (Textual defaults for layout)."""
+
+    BINDINGS = [
+        Binding(
+            "left,h,escape,q",
+            "quit_summary",
+            "Close",
+            show=True,
+            priority=True,
+        ),
+        Binding("Q", "quit_application", "Quit app", show=True, priority=True),
+        Binding("J", "scroll_summary_down", "Scroll down", priority=True),
+        Binding("K", "scroll_summary_up", "Scroll up", priority=True),
+        Binding("u", "scroll_summary_page_up", "Page up", priority=True),
+        Binding("d", "scroll_summary_page_down", "Page down", priority=True),
+    ]
+
+    def __init__(self, data: np.ndarray, id=None) -> None:
+        super().__init__(id=id)
+        arr = np.asarray(data)
+        flat_max = int(np.argmax(arr))
+        flat_min = int(np.argmin(arr))
+        # Row 1: moments / norms; row 2: extrema and indices (same ddof as ``np.std``).
+        self._stat_rows: list[list[tuple[str, str]]] = [
+            [
+                ("Mean", f"{float(np.mean(arr)):.5g}"),
+                ("Var", f"{float(np.var(arr)):.5g}"),
+                ("Std", f"{float(np.std(arr)):.5g}"),
+                ("L2 norm", f"{float(np.linalg.norm(arr)):.5g}"),
+            ],
+            [
+                ("Max", f"{float(np.max(arr)):.5g}"),
+                ("Max idx", _format_stat_index(arr, flat_max)),
+                ("Min", f"{float(np.min(arr)):.5g}"),
+                ("Min idx", _format_stat_index(arr, flat_min)),
+            ],
+        ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="summary_dialog"):
+            yield Static("Summary", id="summary_modal_title")
+            with VerticalScroll(id="summary_stat_scroll"):
+                with VerticalGroup(id="summary_stat_grid"):
+                    for row in self._stat_rows:
+                        # ``Horizontal`` / ``Vertical`` default to ``height: 1fr`` and stretch
+                        # rows to fill the scroll viewport; ``*Group`` uses ``height: auto``.
+                        with HorizontalGroup(classes="summary-stat-row"):
+                            for title, value in row:
+                                box = VerticalGroup(
+                                    Static(
+                                        value,
+                                        classes="summary-stat-value",
+                                        markup=False,
+                                    ),
+                                    classes="summary-stat-box",
+                                )
+                                box.border_title = title
+                                yield box
+        yield Footer()
+
+    def action_quit_summary(self) -> None:
+        self.app.pop_screen()
+
+    def action_quit_application(self) -> None:
+        self.app.exit()
+
+    def _summary_scroll(self) -> VerticalScroll:
+        return self.query_one("#summary_stat_scroll", VerticalScroll)
+
+    def action_scroll_summary_down(self) -> None:
+        self._summary_scroll().scroll_down()
+
+    def action_scroll_summary_up(self) -> None:
+        self._summary_scroll().scroll_up()
+
+    def action_scroll_summary_page_down(self) -> None:
+        self._summary_scroll().scroll_page_down()
+
+    def action_scroll_summary_page_up(self) -> None:
+        self._summary_scroll().scroll_page_up()
 
 
 def _cell_value_to_str(value: object) -> str:
@@ -858,7 +951,7 @@ class H5TUIApp(App):
         Binding("p", "toggle_plot", "Plot", show=True),
         Binding("P", "toggle_plot_histogram", "Histogram", show=True),
         Binding("s", "save_plot", "Save plot", show=True),
-        Binding("A", "aggregate_data", "Aggregate", show=True),
+        Binding("A", "aggregate_data", "Summary", show=True),
         Binding("J", "scroll_preview_down", "Scroll preview", show=False),
         Binding("K", "scroll_preview_up", "Scroll preview", show=False),
     ]
@@ -881,24 +974,31 @@ class H5TUIApp(App):
         self._preview_line_width = _ND_LINEWIDTH_DEFAULT
         self._data = None
 
-        self.is_aggregated = False
         self._refresh_guard = False
         # When True, 1D plot view shows a value histogram instead of index vs value.
         self._plot_histogram = False
-        # Full header text while a dataset is open (used for aggregate; avoids broken
-        # concatenation from Static.content / non-string renderables).
-        self._dataset_detail_header = ""
         # HDF5 path for the dataset opened in full view (basename used for save-as default).
         self._open_dataset_path: str | None = None
 
     def on_unmount(self) -> None:
         self._file.close()
 
+    def _header_content(
+        self, h5_path: str, *, dataset_meta: str | None = None
+    ) -> Content:
+        if dataset_meta is None:
+            return Content.from_markup("Path: [$accent]$path[/]", path=h5_path)
+        return Content.from_markup(
+            "Path: [$accent]$path[/]\nDataset: [$accent]$meta[/]",
+            path=h5_path,
+            meta=escape(dataset_meta),
+        )
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield Footer()
 
-        self._header_widget = Static("Path: /", id="header", markup=False)
+        self._header_widget = Static(self._header_content("/"), id="header")
         yield self._header_widget
         with Horizontal(id="browser"):
             self._parent_list = MyOptionList(id="dirs-parent", markup=False)
@@ -1067,8 +1167,6 @@ class H5TUIApp(App):
 
     def _clear_detail_view_state(self) -> None:
         """Leave full dataset / plot / table view and restore default printing."""
-        self.is_aggregated = False
-        self._dataset_detail_header = ""
         self._data = None
         self._open_dataset_path = None
         self._plot_histogram = False
@@ -1139,7 +1237,7 @@ class H5TUIApp(App):
             self.refresh_current_column(0)
             self.refresh_parent_column()
             self.refresh_preview()
-            self.update_header(f"Path: {self._cur_dir}")
+            self.update_header(self._header_content(self._cur_dir))
             self.refresh_bindings()
             return
         if oid == "dirs-current":
@@ -1176,10 +1274,12 @@ class H5TUIApp(App):
 
         self._preview.reprint()
 
-        self._dataset_detail_header = (
-            f"Path: {path}\nDataset: <{dset_dtype}> {dset_shape}"
+        self.update_header(
+            self._header_content(
+                path,
+                dataset_meta=f"<{dset_dtype}> {dset_shape}",
+            )
         )
-        self.update_header(self._dataset_detail_header)
         # Focus DataTable when it is the active view; focusing the parent ColumnContent
         # would steal focus from the table (requires mouse click to use j/k on rows).
         if self.has_class("view-dtable"):
@@ -1187,19 +1287,8 @@ class H5TUIApp(App):
         else:
             self._preview.focus()
 
-    def update_header(self, string):
-        self._header_widget.update(string)
-
-    def aggregate_data(self):
-        stats = {
-            "mean": float(np.mean(self._data)),
-            "std": float(np.std(self._data)),
-            "max": float(np.max(self._data)),
-            "min": float(np.min(self._data)),
-            "L2 norm": float(np.linalg.norm(self._data)),
-        }
-
-        return stats
+    def update_header(self, header: Content) -> None:
+        self._header_widget.update(header)
 
     def action_scroll_preview_down(self) -> None:
         """Nudge preview when file lists are focused (``J`` does not steal table jump)."""
@@ -1223,12 +1312,10 @@ class H5TUIApp(App):
             self._preview.scroll_up()
 
     def check_action(self, action, parameters):
-        if action == "aggregate_data" and not self.has_class("view-dataset"):
-            return False
-        elif action in ("scroll_preview_down", "scroll_preview_up") and isinstance(
-            self.screen, (AttributeScreen, SavePlotScreen)
+        if action in ("scroll_preview_down", "scroll_preview_up") and isinstance(
+            self.screen, (AttributeScreen, SavePlotScreen, DatasetSummaryScreen)
         ):
-            # AttributeScreen uses J/K to scroll attribute text.
+            # Attribute/save/summary modals use J/K for inner scroll.
             return False
         elif action in ("scroll_preview_down", "scroll_preview_up") and (
             self.focused is self._preview._df
@@ -1250,7 +1337,9 @@ class H5TUIApp(App):
 
     def action_exit_dataset_view(self) -> None:
         """Leave full dataset / table / plot view and return focus to the file columns."""
-        if isinstance(self.screen, (AttributeScreen, SavePlotScreen)):
+        if isinstance(
+            self.screen, (AttributeScreen, SavePlotScreen, DatasetSummaryScreen)
+        ):
             return
         if self.has_class("view-plot") and not self.has_class("view-dataset"):
             self.remove_class("view-plot")
@@ -1269,7 +1358,7 @@ class H5TUIApp(App):
 
     def action_quit_contextual(self) -> None:
         """``q``: leave plot or dataset view if open; otherwise quit (file browser only)."""
-        if isinstance(self.screen, SavePlotScreen):
+        if isinstance(self.screen, (SavePlotScreen, DatasetSummaryScreen)):
             self.pop_screen()
             return
         if self.has_class("view-plot"):
@@ -1333,9 +1422,26 @@ class H5TUIApp(App):
         name = os.path.basename(base) or "plot"
         return np.asarray(data_arr), name
 
+    def _get_aggregate_data_context(self) -> np.ndarray | None:
+        """Numeric array for summary: full dataset view, plot preview, or selected dataset."""
+        if self.has_class("view-dataset"):
+            d = self._data
+            return None if d is None else np.asarray(d)
+        if self.has_class("view-plot") and self._data is not None:
+            return np.asarray(self._data)
+        path = self.get_selected_dataset_path()
+        if path is None:
+            return None
+        try:
+            return np.asarray(self._file[path][...])
+        except Exception:
+            return None
+
     def action_save_plot(self) -> None:
         """Open save dialog for 1D numeric data (``s``)."""
-        if isinstance(self.screen, (AttributeScreen, SavePlotScreen)):
+        if isinstance(
+            self.screen, (AttributeScreen, SavePlotScreen, DatasetSummaryScreen)
+        ):
             return
         data, name = self._get_1d_save_plot_context()
         if data is None or name is None:
@@ -1347,46 +1453,37 @@ class H5TUIApp(App):
             return
         self.push_screen(SavePlotScreen(data, name))
 
-    def action_aggregate_data(self):
-        if self.has_class("view-dataset"):
-            if not is_aggregatable(self._data):
-                self.notify(
-                    "Only numeric arrays may be aggregated",
-                    severity="warning",
-                    timeout=2,
-                )
-                return
-
-            if not self.is_aggregated:
-                base = self._dataset_detail_header or f"Path: {self._cur_dir}"
-                stats = self.aggregate_data()
-                agg_string = (
-                    "\nSummary: "
-                    + "; ".join(
-                        [f"{key} = {value:.5g}" for key, value in stats.items()]
-                    )
-                    + "; "
-                )
-                self._dataset_detail_header = base + agg_string
-                self.update_header(self._dataset_detail_header)
-                self.notify("Summarizing...", timeout=2)
-                self.is_aggregated = True
+    def action_aggregate_data(self) -> None:
+        """Open dataset summary modal (``A``): numeric stats in a card grid."""
+        if isinstance(
+            self.screen, (AttributeScreen, SavePlotScreen, DatasetSummaryScreen)
+        ):
+            return
+        data = self._get_aggregate_data_context()
+        if data is None or not is_aggregatable(data):
+            self.notify(
+                "Select or open a numeric dataset to summarize",
+                severity="warning",
+                timeout=3,
+            )
+            return
+        self.push_screen(DatasetSummaryScreen(data))
 
     def action_toggle_dark(self) -> None:
-        """Switch between Nord (dark) and Textual light theme."""
-        self.theme = "textual-light" if self.theme == "nord" else "nord"
+        """Switch between Nord (dark) and Catppuccin Latte (light)."""
+        self.theme = "nord" if self.theme == "catppuccin-latte" else "catppuccin-latte"
 
     def action_goto_parent(self) -> None:
         """Either displays parent or hides dataset"""
         has_parent_dir = self._cur_dir != "/"
         if has_parent_dir and not self.has_class("view-dataset"):
             self._cur_dir = os.path.dirname(self._cur_dir)
-            self._header_widget.update(f"Path: {self._cur_dir}")
+            self.update_header(self._header_content(self._cur_dir))
             self.refresh_current_column(self._prev_highlighted)
             self.refresh_parent_column()
         self._clear_detail_view_state()
         self._current_list.focus()
-        self.update_header(f"Path: {self._cur_dir}")
+        self.update_header(self._header_content(self._cur_dir))
         self.refresh_preview()
         self.refresh_bindings()
 
@@ -1417,7 +1514,7 @@ class H5TUIApp(App):
                 if isinstance(self._file[path], h5py.Group):
                     self._prev_highlighted = highlighted
                     self._cur_dir = path
-                    self._header_widget.update(f"Path: {self._cur_dir}")
+                    self.update_header(self._header_content(self._cur_dir))
                     self.refresh_current_column(0)
                     self.refresh_parent_column()
                     self.refresh_preview()
