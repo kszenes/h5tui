@@ -61,6 +61,84 @@ def h5_parent_path(path: str) -> str | None:
     return parent or "/"
 
 
+def _format_nbytes_human(n: int) -> str:
+    """Format a byte count using B, KB, MB, GB, TB (1024-based)."""
+    if n < 0:
+        return str(n)
+    x = float(n)
+    units = ("B", "KB", "MB", "GB", "TB")
+    for i, u in enumerate(units):
+        if x < 1024.0 or u == "TB":
+            if u == "B":
+                return f"{int(n)} B"
+            if abs(x - round(x)) < 1e-9:
+                return f"{int(round(x))} {u}"
+            return f"{x:.1f} {u}"
+        x /= 1024.0
+    return f"{int(n)} B"
+
+
+def _dataset_size_display(dset: h5py.Dataset) -> str:
+    """Human-readable stored size (``nbytes``), or ``unknown`` if not available."""
+    try:
+        return _format_nbytes_human(int(dset.nbytes))
+    except Exception:
+        return "unknown"
+
+
+def _dataset_compression_detail(dset: h5py.Dataset) -> str | None:
+    """``None`` if uncompressed; else ``gzip(4)``-style label."""
+    comp = dset.compression
+    if not comp:
+        return None
+    opts = dset.compression_opts
+    if opts is not None and opts != ():
+        return f"{comp}({opts})"
+    return str(comp)
+
+
+def format_dataset_header_metadata(dset: h5py.Dataset) -> str:
+    """Build the Dataset header line: dtype, shape, then HDF5 properties separated by `` | ``."""
+    if dset.dtype.fields:
+        dtype_display = str([str(field[0]) for field in dset.dtype.fields.values()])
+    else:
+        dtype_display = str(dset.dtype)
+    parts: list[str] = [f"<{dtype_display}> {dset.shape}"]
+
+    if dset.chunks is not None:
+        parts.append(f"chunks={dset.chunks}")
+
+    cd = _dataset_compression_detail(dset)
+    if cd:
+        parts.append(f"compression={cd}")
+
+    filt: list[str] = []
+    if dset.shuffle:
+        filt.append("shuffle")
+    if dset.fletcher32:
+        filt.append("fletcher32")
+    if filt:
+        parts.append("filters=" + "+".join(filt))
+
+    if dset.scaleoffset is not None:
+        parts.append(f"scale-offset={dset.scaleoffset!r}")
+
+    ms = getattr(dset, "maxshape", None)
+    if ms is not None and ms != dset.shape:
+        parts.append(f"maxshape={ms}")
+
+    if getattr(dset, "is_virtual", False):
+        parts.append("virtual")
+        try:
+            parts.append(f"vds_sources={len(dset.virtual_sources())}")
+        except Exception:
+            pass
+
+    parts.append(f"{_dataset_size_display(dset)}")
+
+    return " | ".join(parts)
+
+
 class AttributeScreen(ModalScreen):
     BINDINGS = [
         Binding(
@@ -1130,7 +1208,13 @@ class H5TUIApp(App):
 
     def _dataset_preview_block(self, dset: h5py.Dataset) -> str:
         lw = int(self._preview_line_width)
-        lines = [f"shape: {dset.shape}", f"dtype: {dset.dtype}\n"]
+        cd = _dataset_compression_detail(dset)
+        lines = [
+            f"shape: {dset.shape}",
+            f"dtype: {dset.dtype}",
+            f"size: {_dataset_size_display(dset)}",
+            f"compression: {cd if cd else 'none'}",
+        ]
         if dset.size == 0:
             lines.append("(empty)")
             return "\n".join(lines)
@@ -1252,8 +1336,11 @@ class H5TUIApp(App):
         self.remove_class("view-plot")
         self._plot_histogram = False
         try:
-            dset = self._file[path]
-            dset_shape = dset.shape
+            node = self._file[path]
+            if not isinstance(node, h5py.Dataset):
+                self.notify(f"Not a dataset: {path}", severity="error", timeout=8)
+                return
+            dset = node
             dset_data = dset[...]
         except Exception as e:
             self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
@@ -1266,18 +1353,15 @@ class H5TUIApp(App):
         self.add_class("preview-maximized")
         if is_dataframe(self._data):
             self.add_class("view-dtable")
-            dset_dtype = [str(field[0]) for field in dset.dtype.fields.values()]
-        else:
-            dset_dtype = dset.dtype
-            if should_use_ndarray_datatable(self._data):
-                self.add_class("view-dtable")
+        elif should_use_ndarray_datatable(self._data):
+            self.add_class("view-dtable")
 
         self._preview.reprint()
 
         self.update_header(
             self._header_content(
                 path,
-                dataset_meta=f"<{dset_dtype}> {dset_shape}",
+                dataset_meta=format_dataset_header_metadata(dset),
             )
         )
         # Focus DataTable when it is the active view; focusing the parent ColumnContent
