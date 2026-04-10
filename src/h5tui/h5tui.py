@@ -185,13 +185,31 @@ def _dataset_compression_detail(dset: h5py.Dataset) -> str | None:
     return str(comp)
 
 
+def _structured_field_count(dset: h5py.Dataset) -> int:
+    n = dset.dtype.names
+    return len(n) if n else 0
+
+
+def _structured_dataset_summary_line(dset: h5py.Dataset) -> str:
+    """Single-line summary for structured datasets (same wording as header / browse preview)."""
+    nf = _structured_field_count(dset)
+    sh = dset.shape
+    if dset.ndim == 0:
+        return f"structured scalar · {nf} fields"
+    if dset.ndim == 1:
+        return f"{int(sh[0])} rows × {nf} fields"
+    if dset.ndim == 2:
+        return f"{int(sh[0])}×{int(sh[1])} · {nf} fields/element"
+    return f"structured {sh} · {nf} fields/element"
+
+
 def format_dataset_header_metadata(dset: h5py.Dataset) -> str:
-    """Build the Dataset header line: dtype, shape, then HDF5 properties separated by `` | ``."""
-    if dset.dtype.fields:
-        dtype_display = str([str(field[0]) for field in dset.dtype.fields.values()])
+    """Build the Dataset header line: dtype + shape, or compact structured summary."""
+    if dset.dtype.fields is not None:
+        parts = [_structured_dataset_summary_line(dset)]
     else:
         dtype_display = str(dset.dtype)
-    parts: list[str] = [f"<{dtype_display}> {dset.shape}"]
+        parts = [f"<{dtype_display}> {dset.shape}"]
 
     if dset.chunks is not None:
         parts.append(f"chunks={dset.chunks}")
@@ -1215,22 +1233,57 @@ LAZY_2D_WINDOW_COLS = 120
 # Browse-mode snapshot table (sidebar preview before pressing ``l``).
 PREVIEW_TABLE_1D_ROWS = 25
 PREVIEW_TABLE_2D_SIZE = 8
+PREVIEW_TABLE_COMPOUND_ROWS = 12
+PREVIEW_TABLE_COMPOUND_COLS = 8
 # Full ``format_ndarray_text`` preview (any ndim); must stay small — whole array is read.
 PREVIEW_BROWSE_TEXT_MAX_ELEMENTS = 512
 _PREVIEW_ELLIPSIS = "…"
 
 
-def _browse_preview_plain_datatable_eligible(dset: h5py.Dataset) -> bool:
-    """Plain 1D/2D arrays we show as a small DataTable in the browse preview."""
+def _browse_preview_datatable_eligible(dset: h5py.Dataset) -> bool:
+    """Datasets we show as a small browse DataTable: plain 1D/2D or 1D compound (structured)."""
     if dset.size == 0:
         return False
-    if len(dset.dtype) != 0 or dset.dtype == np.dtype("O"):
+    if dset.dtype == np.dtype("O"):
         return False
+    if dset.dtype.fields is not None:
+        return (
+            dset.ndim == 1
+            and dset.dtype.names is not None
+            and len(dset.dtype.names) > 0
+        )
     return dset.ndim in (1, 2)
 
 
 def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> None:
     """Fill browse preview: up to ``PREVIEW_TABLE_1D_ROWS`` / ``PREVIEW_TABLE_2D_SIZE`` with edge ``…``."""
+    if dset.dtype.fields is not None and dset.ndim == 1:
+        names = dset.dtype.names
+        if not names:
+            raise ValueError("compound browse preview requires named fields")
+        n = int(dset.shape[0])
+        m = min(PREVIEW_TABLE_COMPOUND_ROWS, n)
+        chunk = np.asarray(dset[:m])
+        nf = len(names)
+        nshow = min(PREVIEW_TABLE_COMPOUND_COLS, nf)
+        field_names = names[:nshow]
+        more_cols = nf > nshow
+        table.clear(columns=True)
+        col_labels = [str(f) for f in field_names]
+        if more_cols:
+            col_labels.append(_PREVIEW_ELLIPSIS)
+        table.add_columns(*col_labels)
+        for i in range(m):
+            cells = tuple(_format_table_cell(chunk[f][i]) for f in field_names)
+            if more_cols:
+                cells = cells + (_PREVIEW_ELLIPSIS,)
+            table.add_row(*cells, label=str(i))
+        if n > m:
+            table.add_row(
+                *((_PREVIEW_ELLIPSIS,) * len(col_labels)), label=_PREVIEW_ELLIPSIS
+            )
+        return
+
     if dset.ndim == 1:
         n = int(dset.shape[0])
         m = min(PREVIEW_TABLE_1D_ROWS, n)
@@ -1273,7 +1326,7 @@ def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> Non
             table.add_row(*((_PREVIEW_ELLIPSIS,) * ell_cols), label=_PREVIEW_ELLIPSIS)
         return
 
-    raise ValueError("browse preview table only supports 1D/2D")
+    raise ValueError("browse preview table only supports plain 1D/2D and compound 1D")
 
 
 def _dataset_path_element_count(h5file: h5py.File, path: str) -> int | None:
@@ -2024,13 +2077,19 @@ class H5TUIApp(App):
             self._current_list.highlighted = min(prev_highlighted, n - 1)
 
     def _dataset_preview_metadata_block(self, dset: h5py.Dataset) -> str:
-        """Shape / dtype / size / chunks / compression and a trailing blank line (no array body)."""
+        """Browse metadata: plain arrays show shape/dtype; structured show same summary line as header."""
         cd = _dataset_compression_detail(dset)
-        lines = [
-            f"shape: {dset.shape}",
-            f"dtype: {dset.dtype}",
-            f"size: {_dataset_size_display(dset)}",
-        ]
+        if dset.dtype.fields is not None:
+            lines = [
+                _structured_dataset_summary_line(dset),
+                f"size: {_dataset_size_display(dset)}",
+            ]
+        else:
+            lines = [
+                f"shape: {dset.shape}",
+                f"dtype: {dset.dtype}",
+                f"size: {_dataset_size_display(dset)}",
+            ]
         if dset.chunks is not None:
             lines.append(f"chunks: {dset.chunks}")
         if cd:
@@ -2045,7 +2104,7 @@ class H5TUIApp(App):
             lines.append("(empty)")
             return "\n".join(lines)
         if len(dset.dtype) != 0:
-            lines.append("(compound dtype — press l for table view)")
+            lines.append("(no browse preview — press l for full view)")
             return "\n".join(lines)
         try:
             if dset.size <= PREVIEW_BROWSE_TEXT_MAX_ELEMENTS:
@@ -2137,7 +2196,7 @@ class H5TUIApp(App):
                     text += f"\n… ({more} more)"
                 self._preview._content.update(text)
         elif isinstance(node, h5py.Dataset):
-            if _browse_preview_plain_datatable_eligible(node):
+            if _browse_preview_datatable_eligible(node):
                 self._preview.add_class("browse-preview-table")
                 self._preview._content.update(
                     self._dataset_preview_metadata_block(node)
