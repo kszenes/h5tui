@@ -35,6 +35,7 @@ import pandas as pd
 import sys
 import os
 import argparse
+from collections import defaultdict
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
 
@@ -59,6 +60,93 @@ def h5_parent_path(path: str) -> str | None:
     if parent == path:
         return None
     return parent or "/"
+
+
+def _build_link_canonical_name_map(group: h5py.Group, dir_path: str) -> dict[str, str]:
+    """For names in ``group`` that share an HDF5 object id, map alias name -> canonical path.
+
+    Soft and external links are skipped: they are identified by ``_link_arrow_suffix`` instead.
+    """
+    id_to_names: defaultdict[object, list[str]] = defaultdict(list)
+    for name in group.keys():
+        try:
+            lnk = group.get(name, getlink=True)
+        except Exception:
+            continue
+        if isinstance(lnk, (h5py.SoftLink, h5py.ExternalLink)):
+            continue
+        try:
+            obj = group[name]
+        except Exception:
+            continue
+        id_to_names[obj.id].append(name)
+    out: dict[str, str] = {}
+    for names in id_to_names.values():
+        if len(names) < 2:
+            continue
+        full_paths = {n: h5_child_path(dir_path, n) for n in names}
+        canonical = min(full_paths.values(), key=lambda p: (len(p), p))
+        for n, fp in full_paths.items():
+            if fp != canonical:
+                out[n] = canonical
+    return out
+
+
+def _format_external_link_target(lnk: h5py.ExternalLink) -> str:
+    fn = os.path.basename(lnk.filename) or lnk.filename
+    return f"{fn}:{lnk.path}"
+
+
+def _link_arrow_suffix(
+    group: h5py.Group,
+    dir_path: str,
+    name: str,
+    canonical_map: dict[str, str],
+) -> str:
+    """Yazi-style `` -> target`` for soft, external, and hard-link aliases."""
+    try:
+        lnk = group.get(name, getlink=True)
+    except Exception:
+        return ""
+    if isinstance(lnk, h5py.SoftLink):
+        return f" -> {lnk.path}"
+    if isinstance(lnk, h5py.ExternalLink):
+        return f" -> {_format_external_link_target(lnk)}"
+    if name in canonical_map:
+        return f" -> {canonical_map[name]}"
+    return ""
+
+
+def _h5_child_link_blocked_reason(
+    h5file: h5py.File, dir_path: str, name: str
+) -> str | None:
+    """If the child cannot be opened (broken soft/external link), return a message; else ``None``.
+
+    Uses membership checks — no reliance on opening a broken soft link.
+    """
+    parent = h5file[dir_path]
+    if not isinstance(parent, h5py.Group):
+        return None
+    try:
+        lnk = parent.get(name, getlink=True)
+    except Exception:
+        return None
+    if isinstance(lnk, h5py.SoftLink):
+        if lnk.path not in h5file:
+            return "Broken soft link (target is missing)"
+        return None
+    if isinstance(lnk, h5py.ExternalLink):
+        if not os.path.isfile(lnk.filename):
+            return "External link: file not found"
+        if not h5py.is_hdf5(lnk.filename):
+            return "External link: not a valid HDF5 file"
+        try:
+            with h5py.File(lnk.filename, "r") as ext:
+                if lnk.path not in ext:
+                    return "Broken external link (target is missing)"
+        except OSError as e:
+            return f"External link: cannot open file ({e})"
+    return None
 
 
 def _format_nbytes_human(n: int) -> str:
@@ -1099,9 +1187,20 @@ class H5TUIApp(App):
     def on_resize(self, event: Resize) -> None:
         self._preview_line_width = max(40, event.size.width)
 
-    def group_or_dataset(self, dir_path: str, elem: str):
-        path = h5_child_path(dir_path, elem)
-        h5elem = self._file[path]
+    def _row_icon_for_group_child(
+        self, group: h5py.Group, dir_path: str, name: str
+    ) -> str:
+        """Leading icon: link (soft/external), else group vs dataset; broken soft uses link icon."""
+        try:
+            lnk = group.get(name, getlink=True)
+        except Exception:
+            return "🔗  " if UNICODE_SUPPORT else "(link) "
+        if isinstance(lnk, (h5py.SoftLink, h5py.ExternalLink)):
+            return "🔗  " if UNICODE_SUPPORT else "(link) "
+        try:
+            h5elem = group[name]
+        except Exception:
+            return "🔗  " if UNICODE_SUPPORT else "(link) "
         if UNICODE_SUPPORT:
             if isinstance(h5elem, h5py.Group):
                 return "📁  "
@@ -1112,13 +1211,17 @@ class H5TUIApp(App):
                 return "(Group)    "
             if isinstance(h5elem, h5py.Dataset):
                 return "(DataSet)  "
+        return "📄  " if UNICODE_SUPPORT else "(? )    "
 
-    def metadata_line_for_item(self, dir_path: str, item: str) -> str:
-        return (
-            self.group_or_dataset(dir_path, item)
-            + item
-            + f"    {self.build_attr_str(dir_path, item)}"
-        )
+    def _metadata_line_for_item(
+        self, dir_path: str, item: str, canonical_map: dict[str, str]
+    ) -> str:
+        group = self._file[dir_path]
+        if not isinstance(group, h5py.Group):
+            return item
+        prefix = self._row_icon_for_group_child(group, dir_path, item)
+        arrow = _link_arrow_suffix(group, dir_path, item, canonical_map)
+        return f"{prefix}{item}{arrow}    {self.build_attr_str(dir_path, item)}"
 
     def get_selected_itemname(self):
         """Return the HDF5 child name for the highlighted row in Current, or None."""
@@ -1153,7 +1256,10 @@ class H5TUIApp(App):
     def build_attr_str(self, dir_path: str, elem: str):
         """Creates the has attributes string (▼ + num attrs)"""
         path = h5_child_path(dir_path, elem)
-        h5elem = self._file[path]
+        try:
+            h5elem = self._file[path]
+        except Exception:
+            return ""
         num_attrs = len(h5elem.attrs)
         if num_attrs > 0:
             return f"▼ ({num_attrs})"
@@ -1161,8 +1267,15 @@ class H5TUIApp(App):
             return ""
 
     def add_dir_metadata_for(self, dir_path: str):
-        items = list(self._file[dir_path].keys())
-        return [self.metadata_line_for_item(dir_path, item) for item in items]
+        grp = self._file[dir_path]
+        if not isinstance(grp, h5py.Group):
+            return []
+        items = list(grp.keys())
+        canonical_map = _build_link_canonical_name_map(grp, dir_path)
+        return [
+            self._metadata_line_for_item(dir_path, item, canonical_map)
+            for item in items
+        ]
 
     def add_dir_metadata(self, dir_path=None):
         dir_path = dir_path or self._cur_dir
@@ -1213,8 +1326,10 @@ class H5TUIApp(App):
             f"shape: {dset.shape}",
             f"dtype: {dset.dtype}",
             f"size: {_dataset_size_display(dset)}",
-            f"compression: {cd if cd else 'none'}",
         ]
+        if cd:
+            lines.append(f"compression: {cd}")
+        lines.append("")
         if dset.size == 0:
             lines.append("(empty)")
             return "\n".join(lines)
@@ -1290,7 +1405,8 @@ class H5TUIApp(App):
             else:
                 shown = keys[:80]
                 more = len(keys) - len(shown)
-                lines = [self.metadata_line_for_item(path, k) for k in shown]
+                cm = _build_link_canonical_name_map(node, path)
+                lines = [self._metadata_line_for_item(path, k, cm) for k in shown]
                 text = "\n".join(lines)
                 if more > 0:
                     text += f"\n… ({more} more)"
@@ -1594,16 +1710,30 @@ class H5TUIApp(App):
             path = h5_child_path(self._cur_dir, selected_item)
             highlighted = self._current_list.highlighted
 
-            if path in self._file:
-                if isinstance(self._file[path], h5py.Group):
-                    self._prev_highlighted = highlighted
-                    self._cur_dir = path
-                    self.update_header(self._header_content(self._cur_dir))
-                    self.refresh_current_column(0)
-                    self.refresh_parent_column()
-                    self.refresh_preview()
+            blocked = _h5_child_link_blocked_reason(
+                self._file, self._cur_dir, selected_item
+            )
+            if blocked is not None:
+                self.notify(blocked, severity="warning", timeout=6)
+            else:
+                try:
+                    node = self._file[path]
+                except Exception as e:
+                    self.notify(
+                        f"Could not open: {e}",
+                        severity="warning",
+                        timeout=6,
+                    )
                 else:
-                    self.update_content(path)
+                    if isinstance(node, h5py.Group):
+                        self._prev_highlighted = highlighted
+                        self._cur_dir = path
+                        self.update_header(self._header_content(self._cur_dir))
+                        self.refresh_current_column(0)
+                        self.refresh_parent_column()
+                        self.refresh_preview()
+                    else:
+                        self.update_content(path)
         self.refresh_bindings()
 
     def action_toggle_plot(self):
