@@ -199,8 +199,16 @@ def _structured_dataset_summary_line(dset: h5py.Dataset) -> str:
     if dset.ndim == 1:
         return f"{int(sh[0])} rows × {nf} fields"
     if dset.ndim == 2:
-        return f"{int(sh[0])}×{int(sh[1])} · {nf} fields/element"
+        return f"{int(sh[0])} × {int(sh[1])} · {nf} fields/element"
     return f"structured {sh} · {nf} fields/element"
+
+
+def _plain_dataset_shape_display(dset: h5py.Dataset) -> str:
+    """Shape for plain (non-structured) datasets; 2D uses ``nrows × ncols`` (Unicode ×)."""
+    sh = dset.shape
+    if dset.ndim == 2:
+        return f"{int(sh[0])} × {int(sh[1])}"
+    return str(sh)
 
 
 def format_dataset_header_metadata(dset: h5py.Dataset) -> str:
@@ -209,7 +217,7 @@ def format_dataset_header_metadata(dset: h5py.Dataset) -> str:
         parts = [_structured_dataset_summary_line(dset)]
     else:
         dtype_display = str(dset.dtype)
-        parts = [f"<{dtype_display}> {dset.shape}"]
+        parts = [f"<{dtype_display}> {_plain_dataset_shape_display(dset)}"]
 
     if dset.chunks is not None:
         parts.append(f"chunks={dset.chunks}")
@@ -2086,7 +2094,7 @@ class H5TUIApp(App):
             ]
         else:
             lines = [
-                f"shape: {dset.shape}",
+                f"shape: {_plain_dataset_shape_display(dset)}",
                 f"dtype: {dset.dtype}",
                 f"size: {_dataset_size_display(dset)}",
             ]
