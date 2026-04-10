@@ -1215,6 +1215,8 @@ LAZY_2D_WINDOW_COLS = 120
 # Browse-mode snapshot table (sidebar preview before pressing ``l``).
 PREVIEW_TABLE_1D_ROWS = 25
 PREVIEW_TABLE_2D_SIZE = 8
+# Full ``format_ndarray_text`` preview (any ndim); must stay small — whole array is read.
+PREVIEW_BROWSE_TEXT_MAX_ELEMENTS = 512
 _PREVIEW_ELLIPSIS = "…"
 
 
@@ -2022,13 +2024,15 @@ class H5TUIApp(App):
             self._current_list.highlighted = min(prev_highlighted, n - 1)
 
     def _dataset_preview_metadata_block(self, dset: h5py.Dataset) -> str:
-        """Shape / dtype / size / compression and a trailing blank line (no array body)."""
+        """Shape / dtype / size / chunks / compression and a trailing blank line (no array body)."""
         cd = _dataset_compression_detail(dset)
         lines = [
             f"shape: {dset.shape}",
             f"dtype: {dset.dtype}",
             f"size: {_dataset_size_display(dset)}",
         ]
+        if dset.chunks is not None:
+            lines.append(f"chunks: {dset.chunks}")
         if cd:
             lines.append(f"compression: {cd}")
         lines.append("")
@@ -2044,7 +2048,7 @@ class H5TUIApp(App):
             lines.append("(compound dtype — press l for table view)")
             return "\n".join(lines)
         try:
-            if dset.size <= 128:
+            if dset.size <= PREVIEW_BROWSE_TEXT_MAX_ELEMENTS:
                 arr = np.asarray(dset[...])
                 lines.append(format_ndarray_text(arr, line_width=lw))
                 return "\n".join(lines)
@@ -2066,7 +2070,9 @@ class H5TUIApp(App):
                 )
                 lines.append("… (press l for full view)")
             else:
-                lines.append("(large array — press l for full view)")
+                lines.append(
+                    "(3D+ array — no browse slice preview; press l for full view)"
+                )
         except Exception as e:
             lines.append(f"(could not read data: {e})")
         return "\n".join(lines)
