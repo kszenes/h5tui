@@ -829,6 +829,22 @@ def _datatable_source_clipboard_str(app, dt: DataTable) -> str | None:
         try:
             dset = app._file[app._lazy_dset_path]
             idx = int(app._lazy_1d_window_start) + r
+            if getattr(app, "_lazy_structured_1d", False):
+                names = dset.dtype.names
+                if not names:
+                    return None
+                nf = len(names)
+                fv = min(LAZY_STRUCT_FIELD_WINDOW, nf)
+                mx = max(0, nf - fv)
+                fs = max(
+                    0,
+                    min(int(getattr(app, "_lazy_struct_field_start", 0)), mx),
+                )
+                gf = fs + c
+                if gf < 0 or gf >= nf:
+                    return None
+                fname = names[gf]
+                return _scalar_clipboard_str(np.asarray(dset[fname][idx]).item())
             return _scalar_clipboard_str(np.asarray(dset[idx]).item())
         except Exception:
             return None
@@ -1046,6 +1062,33 @@ class MyDataTable(DataTable):
                 label=str(bi + i),
             )
 
+    def update_structured_1d_window(
+        self,
+        chunk: np.ndarray,
+        base_index: int,
+        field_names: tuple[str, ...],
+        *,
+        field_start: int,
+        n_fields_total: int,
+    ) -> None:
+        """Sliding window over 1D compound rows; ``field_names`` is a slice of HDF5 fields."""
+        self.clear(columns=True)
+        col_labels = [str(f) for f in field_names]
+        self.add_columns(*col_labels)
+        if chunk.size == 0:
+            self.border_title = ""
+            return
+        bi = int(base_index)
+        lo = field_start
+        hi = field_start + len(field_names) - 1
+        if n_fields_total <= len(field_names):
+            self.border_title = f"fields [0:{hi}] ({n_fields_total})"
+        else:
+            self.border_title = f"fields [{lo}:{hi}] / {n_fields_total}"
+        for i in range(int(chunk.shape[0])):
+            cells = tuple(_format_table_cell(chunk[f][i]) for f in field_names)
+            self.add_row(*cells, label=str(bi + i))
+
     def update_2d_window(self, arr: np.ndarray, base_row: int, base_col: int) -> None:
         """2D grid with global column headers and row labels (sliding view)."""
         a = np.asarray(arr)
@@ -1148,6 +1191,25 @@ class LazyH5DataTable(MyDataTable):
                     cursor_col=new_gc - la._lazy_2d_window_col,
                 )
                 return
+        if self._lazy_mode() == "1d" and getattr(la, "_lazy_structured_1d", False):
+            r, c = self.cursor_coordinate
+            try:
+                dset = la._file[la._lazy_dset_path]
+                names = dset.dtype.names or ()
+            except Exception:
+                return super().action_cursor_right()
+            nf = len(names)
+            fv = min(LAZY_STRUCT_FIELD_WINDOW, nf)
+            if nf > fv:
+                fs = int(getattr(la, "_lazy_struct_field_start", 0))
+                mx_fs = max(0, nf - fv)
+                if c == len(self.columns) - 1 and fs + fv < nf:
+                    la._lazy_struct_field_start = min(fs + 1, mx_fs)
+                    la.refresh_lazy_1d_datatable(
+                        cursor_row=r,
+                        cursor_col=fv - 1,
+                    )
+                    return
         super().action_cursor_right()
 
     def action_cursor_left(self) -> None:
@@ -1163,6 +1225,20 @@ class LazyH5DataTable(MyDataTable):
                     cursor_row=r,
                     cursor_col=new_gc - la._lazy_2d_window_col,
                 )
+                return
+        if self._lazy_mode() == "1d" and getattr(la, "_lazy_structured_1d", False):
+            r, c = self.cursor_coordinate
+            try:
+                dset = la._file[la._lazy_dset_path]
+                names = dset.dtype.names or ()
+            except Exception:
+                return super().action_cursor_left()
+            nf = len(names)
+            fv = min(LAZY_STRUCT_FIELD_WINDOW, nf)
+            fs = int(getattr(la, "_lazy_struct_field_start", 0))
+            if nf > fv and c == 0 and fs > 0:
+                la._lazy_struct_field_start = max(0, fs - 1)
+                la.refresh_lazy_1d_datatable(cursor_row=r, cursor_col=0)
                 return
         super().action_cursor_left()
 
@@ -1211,6 +1287,25 @@ class LazyH5DataTable(MyDataTable):
             ngc = min(gc + self._JUMP, la._lazy_2d_total_cols - 1)
             la.lazy_2d_set_global_cell(gr, ngc)
             return
+        if self._lazy_mode() == "1d" and getattr(la, "_lazy_structured_1d", False):
+            r, c = self.cursor_coordinate
+            try:
+                dset = la._file[la._lazy_dset_path]
+                names = dset.dtype.names or ()
+            except Exception:
+                return super().action_jump_right()
+            nf = len(names)
+            fv = min(LAZY_STRUCT_FIELD_WINDOW, nf)
+            if nf <= fv:
+                return super().action_jump_right()
+            mx_fs = max(0, nf - fv)
+            fs = int(getattr(la, "_lazy_struct_field_start", 0))
+            step = max(1, fv // 2)
+            nfs = min(mx_fs, fs + step)
+            la._lazy_struct_field_start = nfs
+            new_c = min(c, fv - 1)
+            la.refresh_lazy_1d_datatable(cursor_row=r, cursor_col=new_c)
+            return
         super().action_jump_right()
 
     def action_jump_left(self) -> None:
@@ -1221,6 +1316,24 @@ class LazyH5DataTable(MyDataTable):
             gr, gc = br + r, bc + c
             ngc = max(0, gc - self._JUMP)
             la.lazy_2d_set_global_cell(gr, ngc)
+            return
+        if self._lazy_mode() == "1d" and getattr(la, "_lazy_structured_1d", False):
+            r, c = self.cursor_coordinate
+            try:
+                dset = la._file[la._lazy_dset_path]
+                names = dset.dtype.names or ()
+            except Exception:
+                return super().action_jump_left()
+            nf = len(names)
+            fv = min(LAZY_STRUCT_FIELD_WINDOW, nf)
+            if nf <= fv:
+                return super().action_jump_left()
+            fs = int(getattr(la, "_lazy_struct_field_start", 0))
+            step = max(1, fv // 2)
+            nfs = max(0, fs - step)
+            la._lazy_struct_field_start = nfs
+            new_c = min(c, fv - 1)
+            la.refresh_lazy_1d_datatable(cursor_row=r, cursor_col=new_c)
             return
         super().action_jump_left()
 
@@ -1363,6 +1476,8 @@ _AGG_CHUNK = 2_000_000
 LAZY_DATATABLE_WINDOW_SIZE = 300
 LAZY_2D_WINDOW_ROWS = 120
 LAZY_2D_WINDOW_COLS = 120
+# 1D compound: show this many field columns at once; pan with h/l when there are more.
+LAZY_STRUCT_FIELD_WINDOW = 48
 
 # Browse-mode snapshot table (sidebar preview before pressing ``l``).
 PREVIEW_TABLE_1D_ROWS = 25
@@ -1511,12 +1626,20 @@ def should_use_ndarray_datatable(arr) -> bool:
 
 
 def _lazy_dataset_eligible(dset: h5py.Dataset) -> bool:
-    """Plain numeric arrays only; compound / object dtypes load eagerly."""
-    return (
-        len(dset.dtype) == 0
-        and dset.dtype != np.dtype("O")
-        and int(dset.size) > LAZY_THRESHOLD
-    )
+    """Large arrays: plain numeric (lazy), or 1D compound with named fields (lazy table)."""
+    if int(dset.size) <= LAZY_THRESHOLD:
+        return False
+    if len(dset.dtype) == 0 and dset.dtype != np.dtype("O"):
+        return True
+    return _lazy_h5_structured_1d_datatable(dset)
+
+
+def _lazy_h5_structured_1d_datatable(dset: h5py.Dataset) -> bool:
+    """1D structured dtype with named fields (wide tables use a sliding field window)."""
+    if dset.ndim != 1 or dset.dtype.fields is None:
+        return False
+    names = dset.dtype.names
+    return bool(names)
 
 
 def _lazy_h5_plain_1d_datatable(dset: h5py.Dataset) -> bool:
@@ -1875,6 +1998,19 @@ class ColumnContent(VerticalScroll):
                 )
                 self._df.focus()
                 return
+            if _lazy_h5_structured_1d_datatable(dset):
+                try:
+                    app.refresh_lazy_1d_datatable(cursor_row=0)
+                except Exception as e:
+                    self.notify(f"Could not read dataset: {e}", severity="error")
+                    return
+                self.notify(
+                    "keys: j/k rows, h/l pan fields (wide compound), "
+                    "H/L jump fields, J/K jump rows; y copy; esc quit",
+                    timeout=6,
+                )
+                self._df.focus()
+                return
             if _lazy_h5_plain_2d_datatable(dset):
                 try:
                     app.refresh_lazy_2d_datatable(cursor_row=0, cursor_col=0)
@@ -2045,6 +2181,8 @@ class H5TUIApp(App):
         self._lazy_2d_total_cols = 0
         self._lazy_2d_window_row = 0
         self._lazy_2d_window_col = 0
+        self._lazy_structured_1d = False
+        self._lazy_struct_field_start = 0
 
     def on_unmount(self) -> None:
         self._cancel_large_confirm_timer()
@@ -2295,6 +2433,8 @@ class H5TUIApp(App):
         self._lazy_2d_total_cols = 0
         self._lazy_2d_window_row = 0
         self._lazy_2d_window_col = 0
+        self._lazy_structured_1d = False
+        self._lazy_struct_field_start = 0
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
         self.remove_class("view-dtable")
@@ -2421,6 +2561,7 @@ class H5TUIApp(App):
                 return
             self._lazy_mode = False
             self._lazy_dset_path = None
+            self._lazy_structured_1d = False
             self._data = dset_data
             self._lazy_1d_windowed = False
             self._lazy_2d_windowed = False
@@ -2430,7 +2571,16 @@ class H5TUIApp(App):
         self.add_class("view-dataset")
         self.add_class("preview-maximized")
         if lazy:
+            self._lazy_structured_1d = False
             if _lazy_h5_plain_1d_datatable(dset):
+                self.add_class("view-dtable")
+                self._lazy_1d_windowed = True
+                self._lazy_2d_windowed = False
+                self._lazy_1d_total = int(dset.shape[0])
+                self._lazy_1d_window_start = 0
+            elif _lazy_h5_structured_1d_datatable(dset):
+                self._lazy_structured_1d = True
+                self._lazy_struct_field_start = 0
                 self.add_class("view-dtable")
                 self._lazy_1d_windowed = True
                 self._lazy_2d_windowed = False
@@ -2467,7 +2617,12 @@ class H5TUIApp(App):
         else:
             self._preview.focus()
 
-    def refresh_lazy_1d_datatable(self, *, cursor_row: int | None = None) -> None:
+    def refresh_lazy_1d_datatable(
+        self,
+        *,
+        cursor_row: int | None = None,
+        cursor_col: int | None = None,
+    ) -> None:
         """Load ``LAZY_DATATABLE_WINDOW_SIZE`` rows from ``_lazy_1d_window_start``."""
         if not self._lazy_dset_path:
             return
@@ -2478,6 +2633,34 @@ class H5TUIApp(App):
         self._lazy_1d_window_start = base
         end = min(base + w, n)
         chunk = np.asarray(dset[base:end])
+        if getattr(self, "_lazy_structured_1d", False):
+            names = tuple(dset.dtype.names or ())
+            nf = len(names)
+            fv = min(LAZY_STRUCT_FIELD_WINDOW, nf)
+            mx_fs = max(0, nf - fv)
+            fs = max(
+                0,
+                min(int(getattr(self, "_lazy_struct_field_start", 0)), mx_fs),
+            )
+            self._lazy_struct_field_start = fs
+            field_names = names[fs : fs + fv]
+            self._preview._df.update_structured_1d_window(
+                chunk,
+                base,
+                field_names,
+                field_start=fs,
+                n_fields_total=nf,
+            )
+            if cursor_row is not None and self._preview._df.row_count > 0:
+                cr = max(0, min(int(cursor_row), self._preview._df.row_count - 1))
+                ncols = len(self._preview._df.columns)
+                if cursor_col is not None and ncols > 0:
+                    ccm = max(0, min(int(cursor_col), ncols - 1))
+                    self._preview._df.move_cursor(row=cr, column=ccm, scroll=True)
+                else:
+                    self._preview._df.move_cursor(row=cr, column=0, scroll=True)
+            return
+        self._preview._df.border_title = ""
         self._preview._df.update_1d_window(chunk, base)
         if cursor_row is not None and self._preview._df.row_count > 0:
             cr = max(0, min(int(cursor_row), self._preview._df.row_count - 1))
@@ -2494,7 +2677,10 @@ class H5TUIApp(App):
         else:
             self._lazy_1d_window_start = min(max(0, g - w + 1), n - w)
             cur = g - self._lazy_1d_window_start
-        self.refresh_lazy_1d_datatable(cursor_row=cur)
+        cc = None
+        if getattr(self, "_lazy_structured_1d", False):
+            cc = self._preview._df.cursor_coordinate[1]
+        self.refresh_lazy_1d_datatable(cursor_row=cur, cursor_col=cc)
 
     def refresh_lazy_2d_datatable(
         self, *, cursor_row: int | None = None, cursor_col: int | None = None
@@ -2559,8 +2745,10 @@ class H5TUIApp(App):
             return False
         if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
             dset = self._file[self._lazy_dset_path]
-            return _lazy_h5_plain_1d_datatable(dset) or _lazy_h5_plain_2d_datatable(
-                dset
+            return (
+                _lazy_h5_plain_1d_datatable(dset)
+                or _lazy_h5_structured_1d_datatable(dset)
+                or _lazy_h5_plain_2d_datatable(dset)
             )
         data = getattr(self, "_data", None)
         if data is None:
@@ -2574,7 +2762,9 @@ class H5TUIApp(App):
         df = self._preview._df
         if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
             dset = self._file[self._lazy_dset_path]
-            if _lazy_h5_plain_1d_datatable(dset):
+            if _lazy_h5_plain_1d_datatable(dset) or _lazy_h5_structured_1d_datatable(
+                dset
+            ):
                 n = self._lazy_1d_total
                 if n <= 0:
                     return
