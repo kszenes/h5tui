@@ -1507,6 +1507,21 @@ class GlobalFuzzyFindScreen(ModalScreen):
         self._match_rows: list[tuple[str, str]] = []
         self._refresh_matches(inp.value)
         inp.focus()
+        self.call_after_refresh(self._refresh_matches_after_layout)
+
+    def _refresh_matches_after_layout(self) -> None:
+        try:
+            inp = self.query_one("#global_fuzzy_input", Input)
+        except NoMatches:
+            return
+        self._refresh_matches(inp.value)
+
+    def on_resize(self, event: Resize) -> None:
+        try:
+            inp = self.query_one("#global_fuzzy_input", Input)
+        except NoMatches:
+            return
+        self._refresh_matches(inp.value)
 
     @on(Input.Changed, "#global_fuzzy_input")
     def _on_input_changed(self, event: Input.Changed) -> None:
@@ -1542,12 +1557,34 @@ class GlobalFuzzyFindScreen(ModalScreen):
         lst = self.query_one("#global_fuzzy_list", OptionList)
         lst.action_cursor_up()
 
+    def _picker_path_max_chars(self) -> int:
+        """Cell budget for the path text so one option stays on a single line."""
+        w = 0
+        try:
+            lst = self.query_one("#global_fuzzy_list", OptionList)
+            w = int(lst.size.width)
+        except NoMatches:
+            pass
+        if w <= 0:
+            try:
+                w = int(self.app.size.width)
+            except Exception:
+                w = 80
+            if w <= 0:
+                w = 80
+        # Emoji folder/chart icons are often 2 cells wide in terminals.
+        icon_cells = 10 if UNICODE_SUPPORT else 6
+        return max(20, w - icon_cells - 2)
+
     def _format_row(self, path: str, kind: str) -> str:
         if UNICODE_SUPPORT:
             icon = "📁  " if kind == "group" else "📊  "
         else:
             icon = "(grp) " if kind == "group" else "(set) "
-        return f"{icon}{path}"
+        shown = _ellipsis_h5_path_truncate_beginning(
+            path, self._picker_path_max_chars()
+        )
+        return f"{icon}{shown}"
 
     def _refresh_matches(self, query: str) -> None:
         app = self.app

@@ -261,6 +261,7 @@ GlobalFuzzyFindScreen OptionList#global_fuzzy_list:focus {
 
 GlobalFuzzyFindScreen OptionList#global_fuzzy_list .option-list--option {
   padding: 0;
+  text-wrap: nowrap;
 }
 
 AttributeScreen MyOptionList {
