@@ -270,6 +270,15 @@ SavePlotScreen #save_plot_scroll {
   display: none;
 }
 
+/* Compound: line mode shows X/Y + log; histogram mode shows field + bins. */
+#save-plot-dialog.mode-lineplot.compound-dataset .compound-hist-opts {
+  display: none;
+}
+
+#save-plot-dialog.mode-histogram.compound-dataset .compound-xy-opts {
+  display: none;
+}
+
 #save_plot_title {
   margin: 0 0 1 0;
   text-style: bold;
@@ -325,6 +334,25 @@ SavePlotScreen #save_plot_scroll {
   content-align: center middle;
 }
 
+/* Compound: Select + Log checkbox share one row per axis. */
+#save-plot-dialog .compound-axis-row {
+  width: 100%;
+  height: auto;
+  min-height: 3;
+  margin: 0 0 1 0;
+}
+
+#save-plot-dialog .compound-axis-row Select {
+  width: 1fr;
+  min-height: 3;
+  margin: 0 1 0 0;
+}
+
+#save-plot-dialog .compound-axis-row Checkbox {
+  width: auto;
+  content-align: center middle;
+}
+
 /* ToggleButton defaults use block-cursor colors on focus — unreadable on dark panels. */
 #save-plot-dialog Checkbox:focus > .toggle--label {
   color: $foreground;
@@ -360,18 +388,6 @@ SavePlotScreen #save_plot_scroll {
   background-tint: $foreground 6%;
 }
 
-#save-plot-dialog .save-plot-actions {
-  width: 100%;
-  height: auto;
-  min-height: 3;
-  margin: 0;
-}
-
-#save-plot-dialog .save-plot-actions Checkbox {
-  width: auto;
-  margin: 0 0 0 1;
-}
-
 #save_plot_btn {
   width: 100%;
   height: 3;
@@ -379,10 +395,6 @@ SavePlotScreen #save_plot_scroll {
   max-height: 3;
   margin: 0;
   border: tall $foreground 12%;
-}
-
-#save-plot-dialog .save-plot-actions #save_plot_btn {
-  width: 1fr;
 }
 
 #save_plot_btn:focus {

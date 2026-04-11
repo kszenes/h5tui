@@ -40,6 +40,9 @@ from collections import defaultdict
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
 
+# Compound 1D plots: X axis option meaning row index (0..n-1), not a dtype field.
+COMPOUND_PLOT_INDEX = "__index__"
+
 # NumPy ndarray text formatting (explicit kwargs; do not rely on np.set_printoptions).
 _ND_THRESHOLD = 1000
 _ND_EDGEITEMS = 3
@@ -472,8 +475,137 @@ def _save_1d_lineplot_mpl(
     _open_saved_plot_path(path)
 
 
+def _compound_field_float1d(rec: np.ndarray, name: str) -> np.ndarray:
+    return np.asarray(rec[name], dtype=np.float64).reshape(-1)
+
+
+def _compound_xy_vectors(
+    rec: np.ndarray, x_key: str, y_key: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Row index or field for X; field for Y."""
+    yv = _compound_field_float1d(rec, y_key)
+    if x_key == COMPOUND_PLOT_INDEX:
+        xv = np.arange(int(rec.shape[0]), dtype=np.float64)
+    else:
+        xv = _compound_field_float1d(rec, x_key)
+    return xv, yv
+
+
+def _mask_for_log_axes(
+    x: np.ndarray, y: np.ndarray, log_x: bool, log_y: bool
+) -> tuple[np.ndarray, np.ndarray]:
+    m = np.isfinite(x) & np.isfinite(y)
+    if log_x:
+        m &= x > 0
+    if log_y:
+        m &= y > 0
+    return x[m], y[m]
+
+
+def _plotext_compound_line(
+    plot_plt,
+    rec: np.ndarray,
+    *,
+    x_key: str,
+    y_key: str,
+    log_x: bool,
+    log_y: bool,
+) -> None:
+    xv, yv = _compound_xy_vectors(rec, x_key, y_key)
+    xv, yv = _mask_for_log_axes(xv, yv, log_x, log_y)
+    plot_plt.clear_figure()
+    plot_plt.xscale("log" if log_x else "linear")
+    plot_plt.yscale("log" if log_y else "linear")
+    xlab = "Index" if x_key == COMPOUND_PLOT_INDEX else str(x_key)
+    plot_plt.xlabel(xlab)
+    plot_plt.ylabel(str(y_key))
+    if xv.size == 0:
+        return
+    plot_plt.plot(
+        xv,
+        yv,
+        color="cyan",
+        marker="braille",
+    )
+
+
+def _save_compound_lineplot_mpl(
+    path: str,
+    rec: np.ndarray,
+    *,
+    x_key: str,
+    y_key: str,
+    log_x: bool,
+    log_y: bool,
+    show_lines: bool,
+    show_points: bool,
+    show_smooth: bool,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    xv, yv = _compound_xy_vectors(rec, x_key, y_key)
+    xv, yv = _mask_for_log_axes(xv, yv, log_x, log_y)
+    xlab = "Index" if x_key == COMPOUND_PLOT_INDEX else str(x_key)
+    ylab = str(y_key)
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    if log_x:
+        ax.set_xscale("log")
+    if log_y:
+        ax.set_yscale("log")
+    ax.set_xlabel(xlab)
+    ax.set_ylabel(ylab)
+    if xv.size == 0:
+        ax.text(0.5, 0.5, "No finite points to plot", ha="center", va="center")
+    elif not (show_lines or show_points or show_smooth):
+        ax.text(0.5, 0.5, "No display option selected", ha="center", va="center")
+    else:
+        if show_lines and show_points:
+            ax.plot(xv, yv, "-o", color="C0", markersize=3)
+        elif show_lines:
+            ax.plot(xv, yv, "-", color="C0")
+        elif show_points:
+            ax.plot(xv, yv, "o", color="C0", linestyle="none", markersize=4)
+        if show_smooth:
+            sm = _cubic_smooth_xy(xv, yv)
+            if sm is not None:
+                xf, yf = sm
+                ax.plot(xf, yf, "--", color="C1", label="cubic spline")
+                ax.legend(loc="best")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    _open_saved_plot_path(path)
+
+
+def _save_compound_histogram_mpl(
+    path: str, rec: np.ndarray, field: str, bins: int
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    vals = _compound_field_float1d(rec, field)
+    vals = vals[np.isfinite(vals)]
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    if vals.size:
+        ax.hist(vals, bins=max(1, int(bins)), color="steelblue", edgecolor="black")
+    ax.set_xlabel(str(field))
+    ax.set_ylabel("Count")
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    _open_saved_plot_path(path)
+
+
 class SavePlotScreen(ModalScreen):
     """Save 1D dataset as PDF: histogram or line plot (matplotlib).
+
+    Compound 1D datasets: line plot with X/Y field choosers and optional log axes;
+    histogram uses one numeric field.
 
     After a successful save, the file is opened with the OS default app (e.g. Preview).
     """
@@ -483,16 +615,108 @@ class SavePlotScreen(ModalScreen):
         Binding("Q", "quit_application", "Quit app", show=False, priority=True),
     ]
 
-    def __init__(self, data: np.ndarray, dset_name: str, id=None) -> None:
+    def __init__(
+        self,
+        data: np.ndarray,
+        dset_name: str,
+        *,
+        compound_x: str | None = None,
+        compound_y: str | None = None,
+        compound_log_x: bool = False,
+        compound_log_y: bool = False,
+        plot_settings_only: bool = False,
+        id=None,
+    ) -> None:
         super().__init__(id=id)
         self._data = np.asarray(data)
         self._dset_name = dset_name
-        self._default_bins = _default_histogram_bins(self._data)
+        self._is_compound = self._data.dtype.fields is not None and self._data.ndim == 1
+        self._plot_settings_only = bool(plot_settings_only) and self._is_compound
+        self._numeric_names = (
+            dtype_numeric_field_names(self._data.dtype) if self._is_compound else []
+        )
+        if self._is_compound and self._numeric_names:
+            self._default_bins = _default_histogram_bins(
+                np.asarray(self._data[self._numeric_names[0]], dtype=np.float64)
+            )
+        else:
+            self._default_bins = _default_histogram_bins(self._data)
         safe = dset_name.replace("/", "_").strip() or "plot"
         self._default_filename = f"{safe}.pdf"
+        self._init_compound_x = compound_x
+        self._init_compound_y = compound_y
+        self._init_compound_log_x = compound_log_x
+        self._init_compound_log_y = compound_log_y
+
+    def _compound_select_params(
+        self,
+    ) -> tuple[
+        list[tuple[str, str]],
+        list[tuple[str, str]],
+        list[tuple[str, str]],
+        str,
+        str,
+        str,
+    ]:
+        x_opts = [("Index", COMPOUND_PLOT_INDEX)] + [
+            (n, n) for n in self._numeric_names
+        ]
+        y_opts = [(n, n) for n in self._numeric_names]
+        h_opts = y_opts
+        dx = self._init_compound_x
+        dy = self._init_compound_y
+        if dx is None or not any(dx == v for _, v in x_opts):
+            dx = COMPOUND_PLOT_INDEX
+        if dy is None or not any(dy == v for _, v in y_opts):
+            dy = self._numeric_names[0] if self._numeric_names else ""
+        hf = (
+            dy
+            if dy in self._numeric_names
+            else (self._numeric_names[0] if self._numeric_names else "")
+        )
+        return x_opts, y_opts, h_opts, dx, dy, hf
+
+    def _yield_compound_plot_field_widgets(self) -> ComposeResult:
+        x_opts, y_opts, h_opts, dx, dy, hf = self._compound_select_params()
+        with VerticalGroup(classes="compound-xy-opts"):
+            yield Label("X axis")
+            with HorizontalGroup(classes="compound-axis-row"):
+                yield Select(x_opts, id="compound_x", value=dx)
+                yield Checkbox(
+                    "Log X",
+                    value=bool(self._init_compound_log_x),
+                    id="compound_log_x",
+                )
+            yield Label("Y axis")
+            with HorizontalGroup(classes="compound-axis-row"):
+                yield Select(y_opts, id="compound_y", value=dy)
+                yield Checkbox(
+                    "Log Y",
+                    value=bool(self._init_compound_log_y),
+                    id="compound_log_y",
+                )
+        with VerticalGroup(classes="compound-hist-opts"):
+            yield Label("Histogram field")
+            yield Select(h_opts, id="compound_hist_field", value=hf)
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="save-plot-dialog", classes="mode-lineplot"):
+        if self._plot_settings_only:
+            dlg_classes = "mode-lineplot compound-dataset plot-settings-only"
+            with Vertical(id="save-plot-dialog", classes=dlg_classes):
+                with VerticalScroll(id="save_plot_scroll"):
+                    with VerticalGroup():
+                        yield Static(f"Plot · {self._dset_name}", id="save_plot_title")
+                        yield from self._yield_compound_plot_field_widgets()
+                        yield Button(
+                            "Show plot", variant="primary", id="confirm_plot_btn"
+                        )
+            yield Footer()
+            return
+
+        dlg_classes = "mode-lineplot"
+        if self._is_compound:
+            dlg_classes += " compound-dataset"
+        with Vertical(id="save-plot-dialog", classes=dlg_classes):
             with VerticalScroll(id="save_plot_scroll"):
                 with VerticalGroup():
                     yield Static(f"Save plot · {self._dset_name}", id="save_plot_title")
@@ -505,6 +729,8 @@ class SavePlotScreen(ModalScreen):
                         value="lineplot",
                         allow_blank=False,
                     )
+                    if self._is_compound:
+                        yield from self._yield_compound_plot_field_widgets()
                     with HorizontalGroup(classes="hist-opts"):
                         yield Label("Bins:")
                         yield Input(
@@ -526,7 +752,10 @@ class SavePlotScreen(ModalScreen):
 
     def on_mount(self) -> None:
         self._set_mode_class()
-        self.query_one("#save_filename", Input).focus()
+        if self._plot_settings_only:
+            self.query_one("#compound_x", Select).focus()
+        else:
+            self.query_one("#save_filename", Input).focus()
 
     @staticmethod
     def _mode_str(value: object) -> str:
@@ -540,6 +769,8 @@ class SavePlotScreen(ModalScreen):
         return "lineplot"
 
     def _mode(self) -> str:
+        if getattr(self, "_plot_settings_only", False):
+            return "lineplot"
         sel = self.query_one("#plot_save_mode", Select)
         return self._mode_str(sel.value)
 
@@ -547,7 +778,12 @@ class SavePlotScreen(ModalScreen):
         dlg = self.query_one("#save-plot-dialog", Vertical)
         if mode is None:
             mode = self._mode()
-        dlg.set_classes(f"mode-{mode}")
+        parts = [f"mode-{mode}"]
+        if getattr(self, "_is_compound", False):
+            parts.append("compound-dataset")
+        if getattr(self, "_plot_settings_only", False):
+            parts.append("plot-settings-only")
+        dlg.set_classes(" ".join(parts))
 
     @on(Select.Changed, "#plot_save_mode")
     def _on_mode_changed(self, event: Select.Changed) -> None:
@@ -557,10 +793,35 @@ class SavePlotScreen(ModalScreen):
         self._set_mode_class(mode)
 
     def action_close_save(self) -> None:
+        if getattr(self, "_plot_settings_only", False):
+            fn = getattr(self.app, "_on_compound_plot_settings_cancelled", None)
+            if callable(fn):
+                fn()
         self.app.pop_screen()
 
     def action_quit_application(self) -> None:
         self.app.exit()
+
+    @on(Button.Pressed, "#confirm_plot_btn")
+    def _on_confirm_plot_pressed(self) -> None:
+        self._persist_compound_plot_settings()
+        self.app.pop_screen()
+        fn = getattr(self.app, "_on_compound_plot_settings_confirmed", None)
+        if callable(fn):
+            fn()
+
+    def _persist_compound_plot_settings(self) -> None:
+        if not self._is_compound:
+            return
+        app = self.app
+        app._compound_plot_x = str(self.query_one("#compound_x", Select).value)
+        app._compound_plot_y = str(self.query_one("#compound_y", Select).value)
+        app._compound_plot_log_x = bool(
+            self.query_one("#compound_log_x", Checkbox).value
+        )
+        app._compound_plot_log_y = bool(
+            self.query_one("#compound_log_y", Checkbox).value
+        )
 
     @on(Button.Pressed, "#save_plot_btn")
     def _on_save_pressed(self) -> None:
@@ -570,7 +831,49 @@ class SavePlotScreen(ModalScreen):
             return
         mode = self._mode()
         try:
-            if mode == "histogram":
+            if self._is_compound:
+                self._persist_compound_plot_settings()
+                if mode == "histogram":
+                    try:
+                        bins = int(self.query_one("#save_bins", Input).value)
+                    except ValueError:
+                        self.app.notify(
+                            "Invalid bin count", severity="warning", timeout=2
+                        )
+                        return
+                    bins = max(1, bins)
+                    hf = self.query_one("#compound_hist_field", Select).value
+                    if not hf:
+                        self.app.notify(
+                            "Select a histogram field", severity="warning", timeout=2
+                        )
+                        return
+                    _save_compound_histogram_mpl(path, self._data, str(hf), bins)
+                else:
+                    lines = self.query_one("#line_lines", Checkbox).value
+                    points = self.query_one("#line_points", Checkbox).value
+                    smooth = self.query_one("#line_smooth", Checkbox).value
+                    if not (lines or points or smooth):
+                        self.app.notify(
+                            "Select at least one of lines, points, or smooth",
+                            severity="warning",
+                            timeout=3,
+                        )
+                        return
+                    xk = str(self.query_one("#compound_x", Select).value)
+                    yk = str(self.query_one("#compound_y", Select).value)
+                    _save_compound_lineplot_mpl(
+                        path,
+                        self._data,
+                        x_key=xk,
+                        y_key=yk,
+                        log_x=self.query_one("#compound_log_x", Checkbox).value,
+                        log_y=self.query_one("#compound_log_y", Checkbox).value,
+                        show_lines=lines,
+                        show_points=points,
+                        show_smooth=smooth,
+                    )
+            elif mode == "histogram":
                 try:
                     bins = int(self.query_one("#save_bins", Input).value)
                 except ValueError:
@@ -1014,14 +1317,29 @@ class MyDataTable(DataTable):
         self.app.copy_to_clipboard(s)
         self.app.notify("Copied to clipboard", timeout=1.5)
 
+    def _compute_row_renderables(self, row_index: int):
+        """Center column titles in the header row (Textual left-aligns labels by default)."""
+        if row_index != -1:
+            return super()._compute_row_renderables(row_index)
+        from rich.align import Align
+        from textual.widgets._data_table import RowRenderables
+
+        pad = int(self.cell_padding)
+        header_row = []
+        for column in self.ordered_columns:
+            w = column.get_render_width(self)
+            inner = max(1, w - 2 * pad)
+            header_row.append(Align(column.label, "center", width=inner))
+        return RowRenderables(None, header_row)
+
     def update(self, value):
         self.clear(columns=True)
         self.add_columns(*get_colnames(value))
-        for row in value:
-            row_cleaned = [
-                e.decode("utf8") if isinstance(e, bytes) else e for e in row.item()
-            ]
-            self.add_row(*row_cleaned)
+        for i, row in enumerate(value):
+            # Match browse/lazy tables: pre-format so sign alignment isn't column-dependent
+            # (Textual left-aligns the first column vs others when given raw scalars).
+            cells = tuple(_format_table_cell(e) for e in row.item())
+            self.add_row(*cells, label=str(i))
 
     def update_1d(self, arr: np.ndarray) -> None:
         """Fill one unnamed column; row labels are ``0``, ``1``, … (no colon; text preview uses ``i:``)."""
@@ -1032,7 +1350,7 @@ class MyDataTable(DataTable):
             return
         for i in range(int(a.shape[0])):
             self.add_row(
-                _format_1d_value_display(a[i]),
+                _format_table_cell(a[i]),
                 label=str(i),
             )
 
@@ -1059,7 +1377,7 @@ class MyDataTable(DataTable):
         bi = int(base_index)
         for i in range(int(a.shape[0])):
             self.add_row(
-                _format_1d_value_display(a[i]),
+                _format_table_cell(a[i]),
                 label=str(bi + i),
             )
 
@@ -1413,13 +1731,33 @@ def is_dataframe(obj):
     return len(obj.dtype) != 0
 
 
-def is_plotable(obj):
-    """1D/2D numeric plots; exclude structured dtypes and ``object`` (e.g. string arrays)."""
-    squeezed = np.squeeze(np.asarray(obj))
-    if squeezed.dtype.fields is not None:
+def _is_numeric_dtype_for_plot(dt: np.dtype) -> bool:
+    """Scalar numeric fields suitable for line/histogram plots (excludes nested / complex)."""
+    if dt.fields is not None:
         return False
+    return np.issubdtype(dt, np.number) and not np.issubdtype(dt, np.complexfloating)
+
+
+def dtype_numeric_field_names(dtype: np.dtype) -> list[str]:
+    """Names of top-level compound fields that are plottable scalars."""
+    if dtype.fields is None or not dtype.names:
+        return []
+    return [
+        str(n) for n in dtype.names if _is_numeric_dtype_for_plot(dtype.fields[n][0])
+    ]
+
+
+def has_compound_plot_fields(dtype: np.dtype) -> bool:
+    return bool(dtype_numeric_field_names(dtype))
+
+
+def is_plotable(obj):
+    """1D/2D numeric plots; 1D compound with at least one numeric field; exclude ``object``."""
+    squeezed = np.squeeze(np.asarray(obj))
     if squeezed.dtype == np.dtype("O"):
         return False
+    if squeezed.dtype.fields is not None:
+        return squeezed.ndim == 1 and has_compound_plot_fields(squeezed.dtype)
     return squeezed.ndim == 1 or squeezed.ndim == 2
 
 
@@ -1542,7 +1880,7 @@ def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> Non
         table.clear(columns=True)
         table.add_columns("")
         for i in range(int(a.shape[0])):
-            table.add_row(_format_1d_value_display(a[i]), label=str(i))
+            table.add_row(_format_table_cell(a[i]), label=str(i))
         if n > PREVIEW_TABLE_1D_ROWS:
             table.add_row(_PREVIEW_ELLIPSIS, label=_PREVIEW_ELLIPSIS)
         return
@@ -1674,37 +2012,13 @@ def _format_array_element(v) -> str:
     )
 
 
-def _format_table_cell(v) -> str:
-    """Single-cell text for DataTable rows.
+def _format_table_cell(v: object) -> str:
+    """Format one scalar for DataTable cells (1D, 2D, compound, text preview).
 
-    Integers and bools use a fast path. Real/complex scalars go through
-    ``array2string`` for consistent NumPy-style text output.
+    Bytes/str pass through; structured/object/non-scalar arrays use
+    ``array2string``. Plain scalars use space-padded ``format`` so ``+/-`` align
+    in numeric columns.
     """
-    if isinstance(v, (bytes, bytearray)):
-        return bytes(v).decode("utf-8", errors="replace")
-    if isinstance(v, str):
-        return v
-    x = np.asarray(v)
-    if x.dtype.names is not None or x.dtype == np.dtype("O"):
-        return _format_array_element(v)
-    if x.size != 1:
-        return _format_array_element(v)
-    e = x.item()
-    if isinstance(e, bytes):
-        return e.decode("utf-8", errors="replace")
-    if isinstance(e, str):
-        return e
-    if np.issubdtype(x.dtype, np.bool):
-        return str(bool(e))
-    if np.issubdtype(x.dtype, np.integer):
-        return str(int(e))
-    if np.issubdtype(x.dtype, np.inexact):
-        return _format_array_element(v)
-    return _format_array_element(v)
-
-
-def _format_1d_value_display(v: object) -> str:
-    """Format one scalar for 1D table/preview: space before positive signs (column alignment)."""
     if isinstance(v, (bytes, bytearray)):
         return bytes(v).decode("utf-8", errors="replace")
     if isinstance(v, str):
@@ -1742,7 +2056,7 @@ def format_1d_with_indices(arr: np.ndarray) -> str:
         return ""
 
     def line(i: int) -> str:
-        return f"{i:>{idxw}}: {_format_1d_value_display(a[i])}"
+        return f"{i:>{idxw}}: {_format_table_cell(a[i])}"
 
     if n <= threshold or n <= 2 * edgeitems:
         return "\n".join(line(i) for i in range(n))
@@ -1779,7 +2093,7 @@ def format_1d_with_indices_lazy(dset: h5py.Dataset) -> str:
         return ""
 
     def line(i: int, val: object) -> str:
-        return f"{i:>{idxw}}: {_format_1d_value_display(val)}"
+        return f"{i:>{idxw}}: {_format_table_cell(val)}"
 
     if n <= _ND_THRESHOLD or n <= 2 * edgeitems:
         a = np.asarray(dset[:n])
@@ -1829,7 +2143,15 @@ def format_ndarray_text_lazy(dset: h5py.Dataset, *, line_width: int) -> str:
 
 
 def is_plotable_lazy_dset(dset: h5py.Dataset) -> bool:
-    return len(dset.dtype) == 0 and dset.dtype != np.dtype("O") and dset.ndim in (1, 2)
+    if dset.dtype == np.dtype("O"):
+        return False
+    if dset.ndim == 2:
+        return len(dset.dtype) == 0
+    if dset.ndim != 1:
+        return False
+    if len(dset.dtype) == 0:
+        return True
+    return has_compound_plot_fields(dset.dtype)
 
 
 def is_aggregatable_lazy_dset(dset: h5py.Dataset) -> bool:
@@ -2114,7 +2436,35 @@ class ColumnContent(VerticalScroll):
             dset = app._file[path]
             if not is_plotable_lazy_dset(dset):
                 return
+            if dset.dtype.fields is not None and dset.ndim == 1:
+                data = sample_dset_for_plot_1d(dset)
+                names = dtype_numeric_field_names(dset.dtype)
+                if not names:
+                    return
+                yk = getattr(app, "_compound_plot_y", "") or names[0]
+                if yk not in names:
+                    yk = names[0]
+                if getattr(app, "_plot_histogram", False):
+                    self._plot.plt.clear_figure()
+                    self._plot.plt.xscale("linear")
+                    self._plot.plt.yscale("linear")
+                    _plot_1d_histogram(
+                        self._plot.plt, np.asarray(data[yk], dtype=np.float64)
+                    )
+                else:
+                    xk = getattr(app, "_compound_plot_x", COMPOUND_PLOT_INDEX)
+                    _plotext_compound_line(
+                        self._plot.plt,
+                        data,
+                        x_key=str(xk),
+                        y_key=str(yk),
+                        log_x=bool(getattr(app, "_compound_plot_log_x", False)),
+                        log_y=bool(getattr(app, "_compound_plot_log_y", False)),
+                    )
+                return
             self._plot.plt.clear_figure()
+            self._plot.plt.xscale("linear")
+            self._plot.plt.yscale("linear")
             if dset.ndim == 1:
                 data = sample_dset_for_plot_1d(dset)
                 n = int(dset.shape[0])
@@ -2146,31 +2496,61 @@ class ColumnContent(VerticalScroll):
         if raw is None:
             return
         data = np.squeeze(raw)
-        if is_plotable(data):
-            self._plot.plt.clear_figure()
-            if data.ndim == 1 and getattr(self.app, "_plot_histogram", False):
-                _plot_1d_histogram(self._plot.plt, data)
-            elif data.ndim == 1:
-                self._plot.plt.xlabel("Index")
-                self._plot.plt.plot(
-                    np.arange(data.shape[0]),
-                    data,
-                    color="cyan",
-                    marker="braille",
+        if data.dtype.fields is not None and data.ndim == 1:
+            if not has_compound_plot_fields(data.dtype):
+                return
+            names = dtype_numeric_field_names(data.dtype)
+            if not names:
+                return
+            yk = getattr(self.app, "_compound_plot_y", "") or names[0]
+            if yk not in names:
+                yk = names[0]
+            if getattr(self.app, "_plot_histogram", False):
+                self._plot.plt.clear_figure()
+                self._plot.plt.xscale("linear")
+                self._plot.plt.yscale("linear")
+                _plot_1d_histogram(
+                    self._plot.plt, np.asarray(data[yk], dtype=np.float64)
                 )
-            elif data.ndim == 2:
-                nrows, ncols = data.shape
-                self._plot.plt.plot_size(nrows, ncols)
-                # arbitrary, should be expermineted with
-                size_threshold = 100
-                if nrows < size_threshold and ncols < size_threshold:
-                    self._plot.plt.heatmap(pd.DataFrame(data))
-                    # heatmap has default title, remove it
-                    self._plot.plt.title("")
-                else:
-                    self._plot.plt.matrix_plot(data.tolist())
-                self._plot.plt.xlabel("Column")
-                self._plot.plt.ylabel("Row")
+            else:
+                xk = getattr(self.app, "_compound_plot_x", COMPOUND_PLOT_INDEX)
+                _plotext_compound_line(
+                    self._plot.plt,
+                    data,
+                    x_key=str(xk),
+                    y_key=str(yk),
+                    log_x=bool(getattr(self.app, "_compound_plot_log_x", False)),
+                    log_y=bool(getattr(self.app, "_compound_plot_log_y", False)),
+                )
+            return
+        if not is_plotable(data):
+            return
+        self._plot.plt.clear_figure()
+        self._plot.plt.xscale("linear")
+        self._plot.plt.yscale("linear")
+        if data.ndim == 1 and getattr(self.app, "_plot_histogram", False):
+            _plot_1d_histogram(self._plot.plt, data)
+        elif data.ndim == 1:
+            self._plot.plt.xlabel("Index")
+            self._plot.plt.plot(
+                np.arange(data.shape[0]),
+                data,
+                color="cyan",
+                marker="braille",
+            )
+        elif data.ndim == 2:
+            nrows, ncols = data.shape
+            self._plot.plt.plot_size(nrows, ncols)
+            # arbitrary, should be expermineted with
+            size_threshold = 100
+            if nrows < size_threshold and ncols < size_threshold:
+                self._plot.plt.heatmap(pd.DataFrame(data))
+                # heatmap has default title, remove it
+                self._plot.plt.title("")
+            else:
+                self._plot.plt.matrix_plot(data.tolist())
+            self._plot.plt.xlabel("Column")
+            self._plot.plt.ylabel("Row")
 
 
 class H5TUIApp(App):
@@ -2219,6 +2599,13 @@ class H5TUIApp(App):
         self._refresh_guard = False
         # When True, 1D plot view shows a value histogram instead of index vs value.
         self._plot_histogram = False
+        # 1D compound: line/histogram axes (``COMPOUND_PLOT_INDEX`` = row index for X).
+        self._compound_plot_x = COMPOUND_PLOT_INDEX
+        self._compound_plot_y = ""
+        self._compound_plot_log_x = False
+        self._compound_plot_log_y = False
+        # Browse-mode compound plot: sample held until ``SavePlotScreen`` (plot_settings_only) confirms.
+        self._pending_browse_compound_plot: tuple[np.ndarray, str] | None = None
         # HDF5 path for the dataset opened in full view (basename used for save-as default).
         self._open_dataset_path: str | None = None
         # Large-dataset double-confirm: same key as ``_large_op_arm`` + second press runs op.
@@ -2476,6 +2863,7 @@ class H5TUIApp(App):
         """Leave full dataset / plot / table view and restore default printing."""
         self._data = None
         self._open_dataset_path = None
+        self._pending_browse_compound_plot = None
         self._plot_histogram = False
         self._lazy_mode = False
         self._lazy_dset_path = None
@@ -2503,6 +2891,7 @@ class H5TUIApp(App):
             self.remove_class("view-plot")
             self._plot_histogram = False
             self._data = None
+            self._pending_browse_compound_plot = None
         self._preview.remove_class("empty-group-preview")
         self._preview.remove_class("browse-preview-table")
         name = self.get_selected_itemname()
@@ -2587,6 +2976,82 @@ class H5TUIApp(App):
                 self._clear_detail_view_state()
             self.refresh_preview()
 
+    def _reset_compound_plot_defaults_for_dtype(self, dtype: np.dtype) -> None:
+        names = dtype_numeric_field_names(dtype)
+        if not names:
+            return
+        self._compound_plot_x = COMPOUND_PLOT_INDEX
+        self._compound_plot_y = names[0]
+        self._compound_plot_log_x = False
+        self._compound_plot_log_y = False
+
+    def _is_compound_dataset_view_for_plot(self) -> bool:
+        """Full dataset view (``l``): structured 1D with numeric fields for Plotext."""
+        if not self.has_class("view-dataset"):
+            return False
+        if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+            d = self._file[self._lazy_dset_path]
+            return (
+                d.dtype.fields is not None
+                and d.ndim == 1
+                and has_compound_plot_fields(d.dtype)
+            )
+        if self._data is None:
+            return False
+        a = np.asarray(self._data)
+        return (
+            a.dtype.fields is not None
+            and a.ndim == 1
+            and has_compound_plot_fields(a.dtype)
+        )
+
+    def _sample_and_name_compound_plot_dialog(
+        self,
+    ) -> tuple[np.ndarray, str] | None:
+        """Array sample and short name for compound plot settings modal."""
+        path = self._open_dataset_path
+        if path is None:
+            return None
+        base = os.path.basename(path.rstrip("/")) or "plot"
+        if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+            dset = self._file[self._lazy_dset_path]
+            if (
+                dset.dtype.fields is None
+                or dset.ndim != 1
+                or not has_compound_plot_fields(dset.dtype)
+            ):
+                return None
+            return sample_dset_for_plot_1d(dset), base
+        if self._data is None:
+            return None
+        a = np.asarray(self._data)
+        if (
+            a.dtype.fields is None
+            or a.ndim != 1
+            or not has_compound_plot_fields(a.dtype)
+        ):
+            return None
+        return a, base
+
+    def _on_compound_plot_settings_confirmed(self) -> None:
+        """After ``Show plot`` on compound settings modal: show Plotext pane."""
+        pend = self._pending_browse_compound_plot
+        self._pending_browse_compound_plot = None
+        if pend is not None:
+            self._data = pend[0]
+        self._plot_histogram = False
+        self._preview.remove_class("browse-preview-table")
+        self.add_class("view-plot")
+        self._preview.replot()
+        if pend is not None:
+            self._current_list.focus()
+        else:
+            self._preview.focus()
+        self.refresh_bindings()
+
+    def _on_compound_plot_settings_cancelled(self) -> None:
+        self._pending_browse_compound_plot = None
+
     def update_content(self, path):
         self._preview.remove_class("browse-preview-table")
         self._preview.remove_class("empty-group-preview")
@@ -2655,6 +3120,13 @@ class H5TUIApp(App):
             self.add_class("view-dtable")
         elif should_use_ndarray_datatable(self._data):
             self.add_class("view-dtable")
+
+        if (
+            dset.dtype.fields is not None
+            and dset.ndim == 1
+            and has_compound_plot_fields(dset.dtype)
+        ):
+            self._reset_compound_plot_defaults_for_dtype(dset.dtype)
 
         self._preview.reprint()
 
@@ -2950,6 +3422,7 @@ class H5TUIApp(App):
             self.remove_class("view-plot")
             self._plot_histogram = False
             self._data = None
+            self._pending_browse_compound_plot = None
             self.refresh_preview()
             self._current_list.focus()
             self.refresh_bindings()
@@ -2972,6 +3445,11 @@ class H5TUIApp(App):
         if isinstance(
             self.screen, (SavePlotScreen, DatasetSummaryScreen, JumpToLineScreen)
         ):
+            scr = self.screen
+            if isinstance(scr, SavePlotScreen) and getattr(
+                scr, "_plot_settings_only", False
+            ):
+                self._on_compound_plot_settings_cancelled()
             self.pop_screen()
             return
         if self.has_class("view-plot"):
@@ -3008,7 +3486,7 @@ class H5TUIApp(App):
                 )
 
     def _get_1d_save_plot_context(self) -> tuple[np.ndarray | None, str | None]:
-        """Return 1D numeric data and a short name for default ``{name}.pdf``, or ``(None, None)``."""
+        """Return 1D data for save dialog and basename for default ``{{name}}.pdf``."""
         path: str | None = None
         data_arr = None
 
@@ -3035,11 +3513,18 @@ class H5TUIApp(App):
 
         if data_arr is None:
             return None, None
+        arr = np.asarray(data_arr)
+        if arr.dtype.fields is not None:
+            if arr.ndim != 1 or not has_compound_plot_fields(arr.dtype):
+                return None, None
+            base = (path or "plot").rstrip("/")
+            name = os.path.basename(base) or "plot"
+            return arr, name
         if not is_histogram_eligible(data_arr):
             return None, None
         base = (path or "plot").rstrip("/")
         name = os.path.basename(base) or "plot"
-        return np.asarray(data_arr), name
+        return arr, name
 
     def _get_aggregate_data_context(self) -> np.ndarray | None:
         """Numeric array for summary: full dataset view, plot preview, or selected dataset."""
@@ -3104,10 +3589,17 @@ class H5TUIApp(App):
     def _view_dataset_histogram_eligible(self) -> bool:
         if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
             d = self._file[self._lazy_dset_path]
+            if d.dtype.fields is not None and d.ndim == 1:
+                return has_compound_plot_fields(d.dtype)
             return (
                 d.ndim == 1 and len(d.dtype) == 0 and np.issubdtype(d.dtype, np.number)
             )
-        return self._data is not None and is_histogram_eligible(self._data)
+        if self._data is None:
+            return False
+        a = np.asarray(self._data)
+        if a.dtype.fields is not None and a.ndim == 1:
+            return has_compound_plot_fields(a.dtype)
+        return is_histogram_eligible(self._data)
 
     def _cancel_large_confirm_timer(self) -> None:
         t = self._large_confirm_timer
@@ -3164,9 +3656,41 @@ class H5TUIApp(App):
         dset = node
 
         if histogram:
+            if dset.ndim != 1:
+                self.notify(
+                    "Histogram is only available for 1D datasets",
+                    severity="warning",
+                    timeout=2,
+                )
+                return
+            if dset.dtype.fields is not None:
+                if not has_compound_plot_fields(dset.dtype):
+                    self.notify(
+                        "Histogram requires numeric compound fields",
+                        severity="warning",
+                        timeout=2,
+                    )
+                    return
+                try:
+                    sampled = sample_dset_for_plot_1d(dset)
+                except Exception as e:
+                    self.notify(
+                        f"Could not read dataset: {e}", severity="error", timeout=8
+                    )
+                    return
+                self._reset_compound_plot_defaults_for_dtype(dset.dtype)
+                self._data = sampled
+                self._plot_histogram = True
+                if not self.has_class("view-plot"):
+                    self.notify("Histogram…", timeout=1.5)
+                self._preview.remove_class("browse-preview-table")
+                self.add_class("view-plot")
+                self._preview.replot()
+                self._current_list.focus()
+                self.refresh_bindings()
+                return
             if not (
-                dset.ndim == 1
-                and len(dset.dtype) == 0
+                len(dset.dtype) == 0
                 and dset.dtype != np.dtype("O")
                 and np.issubdtype(dset.dtype, np.number)
             ):
@@ -3210,6 +3734,22 @@ class H5TUIApp(App):
             self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
             return
 
+        if dset.dtype.fields is not None and dset.ndim == 1:
+            self._reset_compound_plot_defaults_for_dtype(dset.dtype)
+            name = os.path.basename(path.rstrip("/")) or "plot"
+            self._pending_browse_compound_plot = (sampled, name)
+            self.push_screen(
+                SavePlotScreen(
+                    sampled,
+                    name,
+                    compound_x=self._compound_plot_x,
+                    compound_y=self._compound_plot_y,
+                    compound_log_x=self._compound_plot_log_x,
+                    compound_log_y=self._compound_plot_log_y,
+                    plot_settings_only=True,
+                )
+            )
+            return
         self._plot_histogram = False
         self._data = sampled
         self.notify("Plotting...", timeout=2)
@@ -3220,7 +3760,7 @@ class H5TUIApp(App):
         self.refresh_bindings()
 
     def action_save_plot(self) -> None:
-        """Open save dialog for 1D numeric data (``s``)."""
+        """Open save dialog for 1D numeric or compound data (``s``)."""
         if isinstance(
             self.screen,
             (
@@ -3234,12 +3774,24 @@ class H5TUIApp(App):
         data, name = self._get_1d_save_plot_context()
         if data is None or name is None:
             self.notify(
-                "Select or open a 1D numeric dataset to save as a plot",
+                "Select or open a 1D plottable dataset to save as a plot",
                 severity="warning",
                 timeout=3,
             )
             return
-        self.push_screen(SavePlotScreen(data, name))
+        if data.dtype.fields is not None and data.ndim == 1:
+            self.push_screen(
+                SavePlotScreen(
+                    data,
+                    name,
+                    compound_x=self._compound_plot_x,
+                    compound_y=self._compound_plot_y,
+                    compound_log_x=self._compound_plot_log_x,
+                    compound_log_y=self._compound_plot_log_y,
+                )
+            )
+        else:
+            self.push_screen(SavePlotScreen(data, name))
 
     def action_aggregate_data(self) -> None:
         """Open dataset summary modal (``A``): numeric stats in a card grid."""
@@ -3450,16 +4002,50 @@ class H5TUIApp(App):
         if self.has_class("view-dataset"):
             if not self._view_dataset_plotable():
                 self.notify(
-                    "Currently only 1D and 2D data is plotable", severity="warning"
+                    "Only 1D/2D numeric data or 1D compound (numeric fields) can be plotted",
+                    severity="warning",
                 )
                 return
             opening = not self.has_class("view-plot")
             if opening:
-                n = self._view_dataset_element_count()
-
                 vk = self._open_dataset_path
                 if vk is None:
                     return
+                if self._is_compound_dataset_view_for_plot():
+                    n = self._view_dataset_element_count()
+
+                    def open_compound_plot_dialog() -> None:
+                        sp = self._sample_and_name_compound_plot_dialog()
+                        if sp is None:
+                            return
+                        sampled, name = sp
+                        if int(n) > _LARGE_PLOT_ELEMENT_THRESHOLD:
+                            self.notify(
+                                "Large dataset: points sampled for plot",
+                                severity="warning",
+                                timeout=4,
+                            )
+                        self._plot_histogram = False
+                        self.push_screen(
+                            SavePlotScreen(
+                                sampled,
+                                name,
+                                compound_x=self._compound_plot_x,
+                                compound_y=self._compound_plot_y,
+                                compound_log_x=self._compound_plot_log_x,
+                                compound_log_y=self._compound_plot_log_y,
+                                plot_settings_only=True,
+                            )
+                        )
+
+                    self._with_large_dataset_confirm(
+                        (vk, "compound_plot_dialog"),
+                        int(n),
+                        _LARGE_PLOT_ELEMENT_THRESHOLD,
+                        open_compound_plot_dialog,
+                    )
+                    return
+                n = self._view_dataset_element_count()
                 if int(n) > _LARGE_PLOT_ELEMENT_THRESHOLD:
                     self.notify(
                         "Large dataset: points sampled for plot",
@@ -3487,6 +4073,7 @@ class H5TUIApp(App):
             self.remove_class("view-plot")
             self._plot_histogram = False
             self._data = None
+            self._pending_browse_compound_plot = None
             self.refresh_preview()
             self._current_list.focus()
             self.refresh_bindings()
