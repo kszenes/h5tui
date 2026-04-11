@@ -13,6 +13,7 @@ dependencies = [
   "numpy",
   "matplotlib",
   "scipy",
+  "rapidfuzz",
 ]
 authors = [
   {name = "Kalman Szenes", email =  "szenes.kalman@gmail.com"}

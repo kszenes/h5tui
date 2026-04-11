@@ -153,7 +153,8 @@ Toast {
 
 AttributeScreen,
 DatasetSummaryScreen,
-JumpToLineScreen {
+JumpToLineScreen,
+GlobalFuzzyFindScreen {
   align: center middle;
 }
 
@@ -203,6 +204,63 @@ GroupFindScreen #group_find_input:focus {
   border: tall $foreground 45%;
   background-tint: $foreground 6%;
   border-title-color: $foreground;
+}
+
+GlobalFuzzyFindScreen #global-fuzzy-dialog {
+  width: 78%;
+  max-width: 100;
+  min-width: 48;
+  height: 70%;
+  max-height: 85%;
+  border: thick $foreground 38%;
+  border-title-align: center;
+  border-title-style: bold;
+  border-title-color: $foreground 78%;
+  border-subtitle-align: center;
+  border-subtitle-style: italic;
+  border-subtitle-color: $foreground 55%;
+  background: $surface;
+  padding: 1 2;
+  layout: vertical;
+}
+
+GlobalFuzzyFindScreen #global_fuzzy_input {
+  width: 100%;
+  height: 3;
+  min-height: 3;
+  margin: 0 0 1 0;
+  border: tall $foreground 12%;
+  background: $panel;
+  border-title-align: left;
+  border-title-style: bold;
+  border-title-color: $foreground 82%;
+}
+
+GlobalFuzzyFindScreen #global_fuzzy_input:focus {
+  border: tall $foreground 45%;
+  background-tint: $foreground 6%;
+  border-title-color: $foreground;
+}
+
+GlobalFuzzyFindScreen OptionList#global_fuzzy_list {
+  height: 1fr;
+  min-height: 6;
+  border: tall $foreground 12%;
+  background: $panel;
+  border-title-align: left;
+  border-title-style: bold;
+  border-title-color: $foreground 82%;
+  padding: 0;
+}
+
+GlobalFuzzyFindScreen OptionList#global_fuzzy_list:focus {
+  border: tall $foreground 45%;
+  background-tint: $foreground 6%;
+  border-title-color: $foreground;
+}
+
+GlobalFuzzyFindScreen OptionList#global_fuzzy_list .option-list--option {
+  padding: 0;
 }
 
 AttributeScreen MyOptionList {

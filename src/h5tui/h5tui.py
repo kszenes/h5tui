@@ -31,6 +31,7 @@ from rich.text import Text
 
 import h5py
 import numpy as np
+from rapidfuzz import fuzz, process
 
 import sys
 import os
@@ -64,6 +65,21 @@ def h5_parent_path(path: str) -> str | None:
     if parent == path:
         return None
     return parent or "/"
+
+
+_ELLIPSIS = "..."
+
+
+def _ellipsis_h5_path_truncate_beginning(path: str, max_chars: int) -> str:
+    """Fit ``path`` in ``max_chars`` by dropping the start, showing ``...`` then the suffix (yazi-style)."""
+    if max_chars <= 0:
+        return ""
+    if len(path) <= max_chars:
+        return path
+    if max_chars <= len(_ELLIPSIS):
+        return path[:max_chars]
+    tail_len = max_chars - len(_ELLIPSIS)
+    return _ELLIPSIS + path[-tail_len:]
 
 
 def _build_link_canonical_name_map(group: h5py.Group, dir_path: str) -> dict[str, str]:
@@ -1451,18 +1467,146 @@ class GroupFindScreen(ModalScreen):
         self.app.exit()
 
 
+class GlobalFuzzyFindScreen(ModalScreen):
+    """Fuzzy search over all groups and datasets (fzf-style), then jump in the tree."""
+
+    # ``process.extract`` otherwise returns *every* path ranked by score (weak hits at the bottom).
+    # Cutoff drops unrelated paths (e.g. ``/experiments`` when searching ``needle``).
+    _FUZZY_SCORE_CUTOFF = 50
+
+    BINDINGS = [
+        Binding(
+            "escape,q",
+            "close_global_fuzzy",
+            "Close",
+            show=True,
+            priority=True,
+        ),
+        Binding("Q", "quit_application", "Quit app", show=False, priority=True),
+        Binding("down,j", "cursor_down", "Down", show=True, priority=True),
+        Binding("up,k", "cursor_up", "Up", show=True, priority=True),
+        Binding("tab", "cycle_focus", "Focus", show=False, priority=True),
+    ]
+
+    _MAX_RESULTS = 150
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="global-fuzzy-dialog"):
+            yield Input(placeholder="Filter paths…", id="global_fuzzy_input")
+            yield OptionList(id="global_fuzzy_list", markup=False)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        dlg = self.query_one("#global-fuzzy-dialog", Vertical)
+        dlg.border_title = "Find path"
+        dlg.border_subtitle = "j/k move · enter pick · tab input/list"
+        inp = self.query_one("#global_fuzzy_input", Input)
+        inp.border_title = "Query"
+        lst = self.query_one("#global_fuzzy_list", OptionList)
+        lst.border_title = "Matches"
+        self._match_rows: list[tuple[str, str]] = []
+        self._refresh_matches(inp.value)
+        inp.focus()
+
+    @on(Input.Changed, "#global_fuzzy_input")
+    def _on_input_changed(self, event: Input.Changed) -> None:
+        self._refresh_matches(event.value)
+
+    @on(Input.Submitted, "#global_fuzzy_input")
+    def _on_submitted(self, event: Input.Submitted) -> None:
+        self._confirm_selection()
+
+    @on(OptionList.OptionSelected, "#global_fuzzy_list")
+    def _on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self._confirm_selection(option_index=event.option_index)
+
+    def action_close_global_fuzzy(self) -> None:
+        self.app.pop_screen()
+
+    def action_quit_application(self) -> None:
+        self.app.exit()
+
+    def action_cycle_focus(self) -> None:
+        inp = self.query_one("#global_fuzzy_input", Input)
+        lst = self.query_one("#global_fuzzy_list", OptionList)
+        if inp.has_focus:
+            lst.focus()
+        else:
+            inp.focus()
+
+    def action_cursor_down(self) -> None:
+        lst = self.query_one("#global_fuzzy_list", OptionList)
+        lst.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        lst = self.query_one("#global_fuzzy_list", OptionList)
+        lst.action_cursor_up()
+
+    def _format_row(self, path: str, kind: str) -> str:
+        if UNICODE_SUPPORT:
+            icon = "📁  " if kind == "group" else "📊  "
+        else:
+            icon = "(grp) " if kind == "group" else "(set) "
+        return f"{icon}{path}"
+
+    def _refresh_matches(self, query: str) -> None:
+        app = self.app
+        index = app._ensure_h5_path_index()
+        lst = self.query_one("#global_fuzzy_list", OptionList)
+        if not index:
+            self._match_rows = []
+            lst.clear_options()
+            lst.highlighted = None
+            return
+        q = query.strip()
+        if not q:
+            rows = sorted(index, key=lambda t: t[0].casefold())[: self._MAX_RESULTS]
+        else:
+            choices = [t[0] for t in index]
+            extracted = process.extract(
+                q,
+                choices,
+                scorer=fuzz.WRatio,
+                limit=self._MAX_RESULTS,
+                score_cutoff=self._FUZZY_SCORE_CUTOFF,
+            )
+            rows = []
+            for _choice, _score, idx in extracted:
+                rows.append(index[idx])
+        self._match_rows = rows
+        opts = [self._format_row(p, k) for p, k in rows]
+        lst.clear_options()
+        lst.add_options(opts)
+        if opts:
+            lst.highlighted = 0
+        else:
+            lst.highlighted = None
+
+    def _confirm_selection(self, *, option_index: int | None = None) -> None:
+        lst = self.query_one("#global_fuzzy_list", OptionList)
+        hi = option_index if option_index is not None else lst.highlighted
+        if hi is None or hi < 0 or hi >= len(self._match_rows):
+            self.app.pop_screen()
+            return
+        path = self._match_rows[hi][0]
+        self.app.navigate_to_h5_path(path)
+        self.app.pop_screen()
+
+
 _MODAL_SCREENS_ALL = (
     AttributeScreen,
     SavePlotScreen,
     DatasetSummaryScreen,
     JumpToLineScreen,
     GroupFindScreen,
+    GlobalFuzzyFindScreen,
 )
 _MODAL_SCREENS_CHILD = (
     SavePlotScreen,
     DatasetSummaryScreen,
     JumpToLineScreen,
     GroupFindScreen,
+    GlobalFuzzyFindScreen,
 )
 
 _KEYS_HELP_TABLE_1D = "keys: j/k row; J/K jump ±10; y copy; esc quit"
@@ -3023,6 +3167,7 @@ class H5TUIApp(App):
         Binding("A", "aggregate_data", "Summary", show=True),
         Binding(":", "jump_to_line", "Jump to line", show=False),
         Binding("/", "group_find", "Find in group", show=False),
+        Binding("f", "global_fuzzy_find", "Find path", show=True),
         Binding("J", "scroll_preview_down", "Scroll preview", show=False),
         Binding("K", "scroll_preview_up", "Scroll preview", show=False),
     ]
@@ -3084,10 +3229,17 @@ class H5TUIApp(App):
         self._browse_find_open = False
         self._group_find_query = ""
         self._browse_find_saved_highlight = 0
+        self._h5_path_index: list[tuple[str, str]] | None = None
 
     def on_unmount(self) -> None:
         self._cancel_large_confirm_timer()
         self._file.close()
+
+    def _header_path_max_display_chars(self) -> int:
+        """Approximate path cell budget for the first header line (``Path: …``)."""
+        w = int(getattr(self, "_preview_line_width", _ND_LINEWIDTH_DEFAULT))
+        # ``#header`` uses horizontal padding 1+1; plain ``Path: `` is 6 cells.
+        return max(16, w - 6 - 2)
 
     def _header_content(
         self,
@@ -3095,13 +3247,30 @@ class H5TUIApp(App):
         *,
         dataset_meta: str | None = None,
     ) -> Content:
+        max_path = self._header_path_max_display_chars()
+        shown = _ellipsis_h5_path_truncate_beginning(h5_path, max_path)
         if dataset_meta is None:
-            return Content.from_markup("Path: [$accent]$path[/]", path=h5_path)
+            return Content.from_markup("Path: [$accent]$path[/]", path=shown)
         return Content.from_markup(
             "Path: [$accent]$path[/]\nDataset: [$accent]$meta[/]",
-            path=h5_path,
+            path=shown,
             meta=escape(dataset_meta),
         )
+
+    def _header_content_for_current_view(self) -> Content:
+        """Header for browse or full dataset view (path truncates from the left when narrow)."""
+        if self.has_class("view-dataset") and self._open_dataset_path:
+            vk = self._open_dataset_path
+            try:
+                node = self._file[vk]
+            except Exception:
+                return self._header_content(self._cur_dir)
+            if isinstance(node, h5py.Dataset):
+                return self._header_content(
+                    vk,
+                    dataset_meta=format_dataset_header_metadata(node),
+                )
+        return self._header_content(self._cur_dir)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -3129,6 +3298,7 @@ class H5TUIApp(App):
 
     def on_resize(self, event: Resize) -> None:
         self._preview_line_width = max(40, event.size.width)
+        self.update_header(self._header_content_for_current_view())
 
     def _row_icon_for_group_child(
         self, group: h5py.Group, dir_path: str, name: str
@@ -3459,6 +3629,11 @@ class H5TUIApp(App):
         self._group_find_query = ""
         self.push_screen(GroupFindScreen())
 
+    def action_global_fuzzy_find(self) -> None:
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
+            return
+        self.push_screen(GlobalFuzzyFindScreen())
+
     def _dataset_preview_metadata_block(self, dset: h5py.Dataset) -> str:
         """Browse metadata: plain arrays show shape/dtype; structured show same summary line as header."""
         cd = _dataset_compression_detail(dset)
@@ -3544,6 +3719,84 @@ class H5TUIApp(App):
         self.remove_class("view-dtable")
         self.remove_class("preview-maximized")
         self._preview.remove_class("browse-preview-table")
+
+    def _ensure_h5_path_index(self) -> list[tuple[str, str]]:
+        """Lazy list of ``(posix path, 'group'|'dataset')`` for :meth:`visititems`."""
+        if self._h5_path_index is not None:
+            return self._h5_path_index
+        items: list[tuple[str, str]] = []
+
+        def _visit(name: str, obj: object) -> None:
+            p = "/" + name if name else "/"
+            if isinstance(obj, h5py.Group):
+                items.append((p, "group"))
+            elif isinstance(obj, h5py.Dataset):
+                items.append((p, "dataset"))
+
+        self._file.visititems(_visit)
+        self._h5_path_index = items
+        return items
+
+    def _browse_stack_indices_to_dir(self, dir_path: str) -> list[int]:
+        """Stack of child indices matching ``action_goto_child`` so ``h`` restores each level.
+
+        For ``_cur_dir`` ``/a/b``, returns ``[i_a, i_b]`` where each index is the row of the
+        next segment in its parent's listing (``get_dir_content`` order).
+        """
+        if not dir_path or dir_path == "/":
+            return []
+        parts = [p for p in dir_path.strip("/").split("/") if p]
+        stack: list[int] = []
+        for i, name in enumerate(parts):
+            parent = "/" + "/".join(parts[:i]) if i else "/"
+            items = self.get_dir_content(parent)
+            try:
+                stack.append(items.index(name))
+            except ValueError:
+                stack.append(0)
+        return stack
+
+    def navigate_to_h5_path(self, path: str) -> None:
+        """Highlight ``path`` in Parent/Current (browse + preview only; no full group/dataset view)."""
+        self._clear_group_find_sticky()
+        self._clear_detail_view_state()
+        try:
+            node = self._file[path]
+        except Exception as e:
+            self.notify(
+                f"Could not open: {path}: {e}",
+                severity="warning",
+                timeout=6,
+            )
+            return
+        if not isinstance(node, (h5py.Group, h5py.Dataset)):
+            return
+        parent = h5_parent_path(path)
+        if parent is None:
+            # File root ``/`` — nothing to select as a child; show top-level listing.
+            self._browse_highlight_stack = []
+            self._cur_dir = "/"
+            self.update_header(self._header_content(self._cur_dir))
+            self.refresh_current_column(0)
+            self.refresh_parent_column()
+            self.refresh_preview()
+            self._current_list.focus()
+            self.refresh_bindings()
+            return
+        base = os.path.basename(path.rstrip("/")) or path
+        self._cur_dir = parent
+        self._browse_highlight_stack = self._browse_stack_indices_to_dir(parent)
+        items = self.get_dir_content(parent)
+        try:
+            idx = items.index(base)
+        except ValueError:
+            idx = 0
+        self.update_header(self._header_content(self._cur_dir))
+        self.refresh_current_column(idx)
+        self.refresh_parent_column()
+        self.refresh_preview()
+        self._current_list.focus()
+        self.refresh_bindings()
 
     def refresh_preview(self) -> None:
         """Update the preview pane from the Current column selection (browse mode)."""
