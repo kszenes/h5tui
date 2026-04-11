@@ -157,6 +157,11 @@ JumpToLineScreen {
   align: center middle;
 }
 
+/* Small filter box; bottom-right (see #group-find-dialog). */
+GroupFindScreen {
+  align: right bottom;
+}
+
 JumpToLineScreen #jump-line-dialog {
   width: 44%;
   max-width: 52;
@@ -168,6 +173,30 @@ JumpToLineScreen #jump-line-dialog {
   border-title-color: $foreground 78%;
   background: $surface;
   padding: 1 2;
+}
+
+GroupFindScreen #group-find-dialog {
+  width: 52;
+  max-width: 52%;
+  min-width: 30;
+  height: auto;
+  border: tall $accent 50%;
+  border-title-align: left;
+  border-title-style: bold;
+  border-title-color: $foreground 78%;
+  background: $surface;
+  padding: 0 1;
+  margin: 0 1 1 0;
+  layout: vertical;
+}
+
+GroupFindScreen #group_find_input {
+  width: 100%;
+  height: 1;
+  min-height: 1;
+  background: $panel;
+  color: $text;
+  border: none;
 }
 
 /* Modal shells: identical outer size for attributes, summary, and save-plot. */

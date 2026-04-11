@@ -35,6 +35,7 @@ import pandas as pd
 
 import sys
 import os
+import re
 import argparse
 from collections import defaultdict
 
@@ -1203,16 +1204,54 @@ class JumpToLineScreen(ModalScreen):
         self.app.pop_screen()
 
 
+class GroupFindScreen(ModalScreen):
+    """Live filter of names in the current HDF5 group (``/``), Yazi-style."""
+
+    BINDINGS = [
+        Binding("escape,q", "cancel_find", "Cancel", show=True, priority=True),
+        Binding("Q", "quit_application", "Quit app", show=False, priority=True),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="group-find-dialog"):
+            yield Input(placeholder="", id="group_find_input")
+
+    def on_mount(self) -> None:
+        dlg = self.query_one("#group-find-dialog", Vertical)
+        dlg.border_title = "Find next:"
+        inp = self.query_one("#group_find_input", Input)
+        inp.focus()
+        self.app.apply_group_find_query("")
+
+    @on(Input.Changed, "#group_find_input")
+    def _on_input_changed(self, event: Input.Changed) -> None:
+        self.app.apply_group_find_query(event.value)
+
+    @on(Input.Submitted, "#group_find_input")
+    def _on_submitted(self, event: Input.Submitted) -> None:
+        self.app.finish_group_find(cancelled=False)
+        self.app.pop_screen()
+
+    def action_cancel_find(self) -> None:
+        self.app.finish_group_find(cancelled=True)
+        self.app.pop_screen()
+
+    def action_quit_application(self) -> None:
+        self.app.exit()
+
+
 _MODAL_SCREENS_ALL = (
     AttributeScreen,
     SavePlotScreen,
     DatasetSummaryScreen,
     JumpToLineScreen,
+    GroupFindScreen,
 )
 _MODAL_SCREENS_CHILD = (
     SavePlotScreen,
     DatasetSummaryScreen,
     JumpToLineScreen,
+    GroupFindScreen,
 )
 
 _KEYS_HELP_TABLE_1D = "keys: j/k row; J/K jump ±10; y copy; esc quit"
@@ -2405,6 +2444,30 @@ def remove_escaped_chars(string: str):
     return string.replace(r"\[", "[")
 
 
+def _text_item_highlight_ci(item: str, query: str) -> Text:
+    """Case-insensitive match spans in ``item`` as styled :class:`~rich.text.Text` runs.
+
+    Used for group find with ``OptionList(markup=False)``: markup strings would print
+    literally; Rich ``Text`` + ``style=`` renders without the markup parser.
+    """
+    if not query:
+        return Text(item)
+    q_fold = query.casefold()
+    if not q_fold or q_fold not in item.casefold():
+        return Text(item)
+    pat = re.escape(query)
+    out = Text()
+    pos = 0
+    for m in re.finditer(f"(?i){pat}", item):
+        if m.start() > pos:
+            out.append(item[pos : m.start()])
+        out.append(item[m.start() : m.end()], style="yellow")
+        pos = m.end()
+    if pos < len(item):
+        out.append(item[pos:])
+    return out
+
+
 class MyOptionList(OptionList):
     BINDINGS = [
         Binding("down,j", "cursor_down", "Down", show=True),
@@ -2685,6 +2748,7 @@ class H5TUIApp(App):
         Binding("s", "save_plot", "Save plot", show=True),
         Binding("A", "aggregate_data", "Summary", show=True),
         Binding(":", "jump_to_line", "Jump to line", show=False),
+        Binding("/", "group_find", "Find in group", show=False),
         Binding("J", "scroll_preview_down", "Scroll preview", show=False),
         Binding("K", "scroll_preview_up", "Scroll preview", show=False),
     ]
@@ -2741,13 +2805,19 @@ class H5TUIApp(App):
         self._lazy_2d_window_col = 0
         self._lazy_structured_1d = False
         self._lazy_struct_field_start = 0
+        self._browse_find_open = False
+        self._group_find_query = ""
+        self._browse_find_saved_highlight = 0
 
     def on_unmount(self) -> None:
         self._cancel_large_confirm_timer()
         self._file.close()
 
     def _header_content(
-        self, h5_path: str, *, dataset_meta: str | None = None
+        self,
+        h5_path: str,
+        *,
+        dataset_meta: str | None = None,
     ) -> Content:
         if dataset_meta is None:
             return Content.from_markup("Path: [$accent]$path[/]", path=h5_path)
@@ -2819,6 +2889,26 @@ class H5TUIApp(App):
         prefix = self._row_icon_for_group_child(group, dir_path, item)
         arrow = _link_arrow_suffix(group, dir_path, item, canonical_map)
         return f"{prefix}{item}{arrow}    {self.build_attr_str(dir_path, item)}"
+
+    def _metadata_line_for_group_find(
+        self,
+        dir_path: str,
+        item: str,
+        canonical_map: dict[str, str],
+        query: str,
+    ) -> Text:
+        group = self._file[dir_path]
+        if not isinstance(group, h5py.Group):
+            return Text(item)
+        prefix = self._row_icon_for_group_child(group, dir_path, item)
+        arrow = _link_arrow_suffix(group, dir_path, item, canonical_map)
+        rest = f"{arrow}    {self.build_attr_str(dir_path, item)}"
+        middle = _text_item_highlight_ci(item, query) if query else Text(item)
+        line = Text()
+        line.append(prefix)
+        line.append_text(middle)
+        line.append(rest)
+        return line
 
     def get_selected_itemname(self):
         """Return the HDF5 child name for the highlighted row in Current, or None."""
@@ -2915,6 +3005,94 @@ class H5TUIApp(App):
             self._current_list.highlighted = None
         else:
             self._current_list.highlighted = min(prev_highlighted, n - 1)
+
+    def _refresh_current_group_find_list(self, query: str) -> None:
+        """Rebuild Current column with Rich Text (styled runs); jump to first match."""
+        grp = self._file[self._cur_dir]
+        if not isinstance(grp, h5py.Group):
+            self._current_list.clear_options()
+            self._current_list.highlighted = None
+            return
+        items = list(grp.keys())
+        canonical_map = _build_link_canonical_name_map(grp, self._cur_dir)
+        opts = [
+            self._metadata_line_for_group_find(
+                self._cur_dir, item, canonical_map, query
+            )
+            for item in items
+        ]
+        prev_highlight = self._current_list.highlighted
+        self._refresh_guard = True
+        try:
+            self._current_list.clear_options()
+            self._current_list.add_options(opts)
+        finally:
+            self._refresh_guard = False
+        n = len(opts)
+        q_fold = query.casefold() if query else ""
+        if query and q_fold:
+            first = next(
+                (i for i, name in enumerate(items) if q_fold in name.casefold()),
+                None,
+            )
+            if first is not None:
+                self._current_list.highlighted = first
+            elif n:
+                # No matches: keep the row that was selected before this refresh.
+                if prev_highlight is not None and 0 <= prev_highlight < n:
+                    self._current_list.highlighted = prev_highlight
+                else:
+                    saved = max(0, self._browse_find_saved_highlight)
+                    self._current_list.highlighted = min(saved, n - 1)
+            else:
+                self._current_list.highlighted = None
+        elif n:
+            saved = max(0, self._browse_find_saved_highlight)
+            self._current_list.highlighted = min(saved, n - 1)
+        else:
+            self._current_list.highlighted = None
+        if not self.has_class("view-dataset"):
+            self.refresh_preview()
+
+    def apply_group_find_query(self, query: str) -> None:
+        if not self._browse_find_open:
+            return
+        self._group_find_query = query
+        self._refresh_current_group_find_list(query)
+
+    def finish_group_find(self, *, cancelled: bool) -> None:
+        self._browse_find_open = False
+        self._group_find_query = ""
+        if cancelled:
+            prev = max(0, self._browse_find_saved_highlight)
+            self.refresh_current_column(prev)
+        else:
+            hi = self._current_list.highlighted
+            if hi is None:
+                hi = max(0, self._browse_find_saved_highlight)
+            self.refresh_current_column(hi)
+        self.update_header(self._header_content(self._cur_dir))
+        if not self.has_class("view-dataset"):
+            self._current_list.focus()
+
+    def action_group_find(self) -> None:
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
+            return
+        if self.has_class("view-dataset"):
+            self.notify(
+                "Close the dataset view (esc) to search the group list",
+                severity="information",
+                timeout=2,
+            )
+            return
+        self._browse_find_saved_highlight = (
+            self._current_list.highlighted
+            if self._current_list.highlighted is not None
+            else 0
+        )
+        self._browse_find_open = True
+        self._group_find_query = ""
+        self.push_screen(GroupFindScreen())
 
     def _dataset_preview_metadata_block(self, dset: h5py.Dataset) -> str:
         """Browse metadata: plain arrays show shape/dtype; structured show same summary line as header."""
