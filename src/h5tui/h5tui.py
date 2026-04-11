@@ -365,6 +365,68 @@ def _plot_1d_histogram(plot_plt, data: np.ndarray, bins: int | None = None) -> N
     plot_plt.ylabel("Count")
 
 
+_PLOT_2D_HEATMAP_THRESHOLD = 100
+
+
+def _plotext_reset_linear(plot_plt) -> None:
+    plot_plt.clear_figure()
+    plot_plt.xscale("linear")
+    plot_plt.yscale("linear")
+
+
+def _plot_preview_compound_1d(
+    plot_plt,
+    data: np.ndarray,
+    *,
+    histogram: bool,
+    compound_x: str,
+    compound_y: str,
+    log_x: bool,
+    log_y: bool,
+) -> None:
+    if histogram:
+        _plotext_reset_linear(plot_plt)
+        _plot_1d_histogram(plot_plt, np.asarray(data[compound_y], dtype=np.float64))
+        return
+    _plotext_compound_line(
+        plot_plt,
+        data,
+        x_key=str(compound_x),
+        y_key=str(compound_y),
+        log_x=log_x,
+        log_y=log_y,
+    )
+
+
+def _plot_preview_plain_1d(
+    plot_plt,
+    y,
+    *,
+    histogram: bool,
+    x: np.ndarray | None = None,
+) -> None:
+    y = np.asarray(y)
+    if histogram:
+        _plot_1d_histogram(plot_plt, y)
+        return
+    xv = np.arange(y.shape[0]) if x is None else np.asarray(x)
+    plot_plt.xlabel("Index")
+    plot_plt.plot(xv, y, color="cyan", marker="braille")
+
+
+def _plot_preview_2d(plot_plt, data: np.ndarray) -> None:
+    data = np.asarray(data)
+    nrows, ncols = data.shape
+    plot_plt.plot_size(nrows, ncols)
+    if nrows < _PLOT_2D_HEATMAP_THRESHOLD and ncols < _PLOT_2D_HEATMAP_THRESHOLD:
+        plot_plt.heatmap(pd.DataFrame(data))
+        plot_plt.title("")
+    else:
+        plot_plt.matrix_plot(data.tolist())
+    plot_plt.xlabel("Column")
+    plot_plt.ylabel("Row")
+
+
 def _cubic_smooth_xy(
     x: np.ndarray, y: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray] | None:
@@ -1067,6 +1129,35 @@ class JumpToLineScreen(ModalScreen):
             return
         self.app.apply_jump_to_line_row(idx)
         self.app.pop_screen()
+
+
+_MODAL_SCREENS_ALL = (
+    AttributeScreen,
+    SavePlotScreen,
+    DatasetSummaryScreen,
+    JumpToLineScreen,
+)
+_MODAL_SCREENS_CHILD = (
+    SavePlotScreen,
+    DatasetSummaryScreen,
+    JumpToLineScreen,
+)
+
+_KEYS_HELP_TABLE_1D = "keys: j/k row; J/K jump ±10; y copy; esc quit"
+_KEYS_HELP_TABLE_2D = "keys: h/j/k/l; H/J/K/L jump ±10; y copy; esc quit"
+
+
+def _reprint_lazy_datatable(
+    preview, refresh, message: str, *, timeout: float = 5.0
+) -> None:
+    """Run lazy refresh; on success notify and focus the data table."""
+    try:
+        refresh()
+    except Exception as e:
+        preview.notify(f"Could not read dataset: {e}", severity="error")
+        return
+    preview.notify(message, timeout=timeout)
+    preview._df.focus()
 
 
 def _cell_value_to_str(value: object) -> str:
@@ -2358,46 +2449,32 @@ class ColumnContent(VerticalScroll):
             dset = app._file[path]
             lw = int(getattr(app, "_preview_line_width", _ND_LINEWIDTH_DEFAULT))
             if _lazy_h5_plain_1d_datatable(dset):
-                try:
-                    app.refresh_lazy_1d_datatable(cursor_row=0)
-                except Exception as e:
-                    self.notify(f"Could not read dataset: {e}", severity="error")
-                    return
                 extra = (
                     " — vlen UTF-8 strings, row window"
                     if dset.dtype == np.dtype("O")
                     else ""
                 )
-                self.notify(
-                    f"keys: j/k row; J/K jump ±10; y copy; esc quit{extra}",
-                    timeout=5,
+                _reprint_lazy_datatable(
+                    self,
+                    lambda: app.refresh_lazy_1d_datatable(cursor_row=0),
+                    f"{_KEYS_HELP_TABLE_1D}{extra}",
                 )
-                self._df.focus()
                 return
             if _lazy_h5_structured_1d_datatable(dset):
-                try:
-                    app.refresh_lazy_1d_datatable(cursor_row=0)
-                except Exception as e:
-                    self.notify(f"Could not read dataset: {e}", severity="error")
-                    return
-                self.notify(
+                _reprint_lazy_datatable(
+                    self,
+                    lambda: app.refresh_lazy_1d_datatable(cursor_row=0),
                     "keys: j/k rows, h/l pan fields (wide compound), "
                     "H/L jump fields, J/K jump rows; y copy; esc quit",
                     timeout=6,
                 )
-                self._df.focus()
                 return
             if _lazy_h5_plain_2d_datatable(dset):
-                try:
-                    app.refresh_lazy_2d_datatable(cursor_row=0, cursor_col=0)
-                except Exception as e:
-                    self.notify(f"Could not read dataset: {e}", severity="error")
-                    return
-                self.notify(
-                    "keys: h/j/k/l; H/J/K/L jump ±10; y copy; esc quit",
-                    timeout=5,
+                _reprint_lazy_datatable(
+                    self,
+                    lambda: app.refresh_lazy_2d_datatable(cursor_row=0, cursor_col=0),
+                    _KEYS_HELP_TABLE_2D,
                 )
-                self._df.focus()
                 return
             self.notify(
                 "Abbreviated text preview (dataset too large for table).",
@@ -2412,15 +2489,15 @@ class ColumnContent(VerticalScroll):
             return
         lw = int(getattr(app, "_preview_line_width", _ND_LINEWIDTH_DEFAULT))
         if is_dataframe(data):
-            self.notify("keys: h/j/k/l; H/J/K/L jump ±10; y copy; esc quit")
+            self.notify(_KEYS_HELP_TABLE_2D)
             self._df.update(data)
             self._df.focus()
         elif should_use_1d_table(data):
-            self.notify("keys: j/k row; J/K jump ±10; y copy; esc quit")
+            self.notify(_KEYS_HELP_TABLE_1D)
             self._df.update_1d(_as_display_1d(np.asarray(data)))
             self._df.focus()
         elif should_use_2d_table(data):
-            self.notify("keys: h/j/k/l; H/J/K/L jump ±10; y copy; esc quit")
+            self.notify(_KEYS_HELP_TABLE_2D)
             self._df.update_2d(np.asarray(data))
             self._df.focus()
         else:
@@ -2429,6 +2506,7 @@ class ColumnContent(VerticalScroll):
     def replot(self):
         """Plot data, currently only supports 1D and 2D data"""
         app = self.app
+        plt = self._plot.plt
         if getattr(app, "_lazy_mode", False):
             path = getattr(app, "_lazy_dset_path", None)
             if not path:
@@ -2444,113 +2522,69 @@ class ColumnContent(VerticalScroll):
                 yk = getattr(app, "_compound_plot_y", "") or names[0]
                 if yk not in names:
                     yk = names[0]
-                if getattr(app, "_plot_histogram", False):
-                    self._plot.plt.clear_figure()
-                    self._plot.plt.xscale("linear")
-                    self._plot.plt.yscale("linear")
-                    _plot_1d_histogram(
-                        self._plot.plt, np.asarray(data[yk], dtype=np.float64)
-                    )
-                else:
-                    xk = getattr(app, "_compound_plot_x", COMPOUND_PLOT_INDEX)
-                    _plotext_compound_line(
-                        self._plot.plt,
-                        data,
-                        x_key=str(xk),
-                        y_key=str(yk),
-                        log_x=bool(getattr(app, "_compound_plot_log_x", False)),
-                        log_y=bool(getattr(app, "_compound_plot_log_y", False)),
-                    )
+                _plot_preview_compound_1d(
+                    plt,
+                    data,
+                    histogram=bool(getattr(app, "_plot_histogram", False)),
+                    compound_x=str(
+                        getattr(app, "_compound_plot_x", COMPOUND_PLOT_INDEX)
+                    ),
+                    compound_y=str(yk),
+                    log_x=bool(getattr(app, "_compound_plot_log_x", False)),
+                    log_y=bool(getattr(app, "_compound_plot_log_y", False)),
+                )
                 return
-            self._plot.plt.clear_figure()
-            self._plot.plt.xscale("linear")
-            self._plot.plt.yscale("linear")
+            _plotext_reset_linear(plt)
             if dset.ndim == 1:
                 data = sample_dset_for_plot_1d(dset)
                 n = int(dset.shape[0])
                 x = np.linspace(0, n - 1, data.shape[0])
-                if getattr(app, "_plot_histogram", False):
-                    _plot_1d_histogram(self._plot.plt, data)
-                else:
-                    self._plot.plt.xlabel("Index")
-                    self._plot.plt.plot(
-                        x,
-                        data,
-                        color="cyan",
-                        marker="braille",
-                    )
+                _plot_preview_plain_1d(
+                    plt,
+                    data,
+                    histogram=bool(getattr(app, "_plot_histogram", False)),
+                    x=x,
+                )
             else:
-                data = sample_dset_for_plot_2d(dset)
-                nrows, ncols = data.shape
-                self._plot.plt.plot_size(nrows, ncols)
-                size_threshold = 100
-                if nrows < size_threshold and ncols < size_threshold:
-                    self._plot.plt.heatmap(pd.DataFrame(data))
-                    self._plot.plt.title("")
-                else:
-                    self._plot.plt.matrix_plot(data.tolist())
-                self._plot.plt.xlabel("Column")
-                self._plot.plt.ylabel("Row")
+                _plot_preview_2d(plt, sample_dset_for_plot_2d(dset))
             return
         raw = getattr(self.app, "_data", None)
         if raw is None:
             return
         data = np.squeeze(raw)
+        app = self.app
+        plt = self._plot.plt
         if data.dtype.fields is not None and data.ndim == 1:
             if not has_compound_plot_fields(data.dtype):
                 return
             names = dtype_numeric_field_names(data.dtype)
             if not names:
                 return
-            yk = getattr(self.app, "_compound_plot_y", "") or names[0]
+            yk = getattr(app, "_compound_plot_y", "") or names[0]
             if yk not in names:
                 yk = names[0]
-            if getattr(self.app, "_plot_histogram", False):
-                self._plot.plt.clear_figure()
-                self._plot.plt.xscale("linear")
-                self._plot.plt.yscale("linear")
-                _plot_1d_histogram(
-                    self._plot.plt, np.asarray(data[yk], dtype=np.float64)
-                )
-            else:
-                xk = getattr(self.app, "_compound_plot_x", COMPOUND_PLOT_INDEX)
-                _plotext_compound_line(
-                    self._plot.plt,
-                    data,
-                    x_key=str(xk),
-                    y_key=str(yk),
-                    log_x=bool(getattr(self.app, "_compound_plot_log_x", False)),
-                    log_y=bool(getattr(self.app, "_compound_plot_log_y", False)),
-                )
+            _plot_preview_compound_1d(
+                plt,
+                data,
+                histogram=bool(getattr(app, "_plot_histogram", False)),
+                compound_x=str(getattr(app, "_compound_plot_x", COMPOUND_PLOT_INDEX)),
+                compound_y=str(yk),
+                log_x=bool(getattr(app, "_compound_plot_log_x", False)),
+                log_y=bool(getattr(app, "_compound_plot_log_y", False)),
+            )
             return
         if not is_plotable(data):
             return
-        self._plot.plt.clear_figure()
-        self._plot.plt.xscale("linear")
-        self._plot.plt.yscale("linear")
-        if data.ndim == 1 and getattr(self.app, "_plot_histogram", False):
-            _plot_1d_histogram(self._plot.plt, data)
-        elif data.ndim == 1:
-            self._plot.plt.xlabel("Index")
-            self._plot.plt.plot(
-                np.arange(data.shape[0]),
+        _plotext_reset_linear(plt)
+        if data.ndim == 1:
+            _plot_preview_plain_1d(
+                plt,
                 data,
-                color="cyan",
-                marker="braille",
+                histogram=bool(getattr(app, "_plot_histogram", False)),
+                x=np.arange(data.shape[0]),
             )
         elif data.ndim == 2:
-            nrows, ncols = data.shape
-            self._plot.plt.plot_size(nrows, ncols)
-            # arbitrary, should be expermineted with
-            size_threshold = 100
-            if nrows < size_threshold and ncols < size_threshold:
-                self._plot.plt.heatmap(pd.DataFrame(data))
-                # heatmap has default title, remove it
-                self._plot.plt.title("")
-            else:
-                self._plot.plt.matrix_plot(data.tolist())
-            self._plot.plt.xlabel("Column")
-            self._plot.plt.ylabel("Row")
+            _plot_preview_2d(plt, data)
 
 
 class H5TUIApp(App):
@@ -3331,15 +3365,7 @@ class H5TUIApp(App):
 
     def action_jump_to_line(self) -> None:
         """Open row jump dialog for plain 1D/2D dataset tables (``:``)."""
-        if isinstance(
-            self.screen,
-            (
-                AttributeScreen,
-                SavePlotScreen,
-                DatasetSummaryScreen,
-                JumpToLineScreen,
-            ),
-        ):
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
         if not self.has_class("view-dataset"):
             return
@@ -3378,8 +3404,7 @@ class H5TUIApp(App):
 
     def check_action(self, action, parameters):
         if action in ("scroll_preview_down", "scroll_preview_up") and isinstance(
-            self.screen,
-            (AttributeScreen, SavePlotScreen, DatasetSummaryScreen, JumpToLineScreen),
+            self.screen, _MODAL_SCREENS_ALL
         ):
             # Attribute/save/summary modals use J/K for inner scroll.
             return False
@@ -3408,15 +3433,7 @@ class H5TUIApp(App):
 
     def action_exit_dataset_view(self) -> None:
         """Leave full dataset / table / plot view and return focus to the file columns."""
-        if isinstance(
-            self.screen,
-            (
-                AttributeScreen,
-                SavePlotScreen,
-                DatasetSummaryScreen,
-                JumpToLineScreen,
-            ),
-        ):
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
         if self.has_class("view-plot") and not self.has_class("view-dataset"):
             self.remove_class("view-plot")
@@ -3442,9 +3459,7 @@ class H5TUIApp(App):
 
     def action_quit_contextual(self) -> None:
         """``q``: leave plot or dataset view if open; otherwise quit (file browser only)."""
-        if isinstance(
-            self.screen, (SavePlotScreen, DatasetSummaryScreen, JumpToLineScreen)
-        ):
+        if isinstance(self.screen, _MODAL_SCREENS_CHILD):
             scr = self.screen
             if isinstance(scr, SavePlotScreen) and getattr(
                 scr, "_plot_settings_only", False
@@ -3761,15 +3776,7 @@ class H5TUIApp(App):
 
     def action_save_plot(self) -> None:
         """Open save dialog for 1D numeric or compound data (``s``)."""
-        if isinstance(
-            self.screen,
-            (
-                AttributeScreen,
-                SavePlotScreen,
-                DatasetSummaryScreen,
-                JumpToLineScreen,
-            ),
-        ):
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
         data, name = self._get_1d_save_plot_context()
         if data is None or name is None:
@@ -3795,15 +3802,7 @@ class H5TUIApp(App):
 
     def action_aggregate_data(self) -> None:
         """Open dataset summary modal (``A``): numeric stats in a card grid."""
-        if isinstance(
-            self.screen,
-            (
-                AttributeScreen,
-                SavePlotScreen,
-                DatasetSummaryScreen,
-                JumpToLineScreen,
-            ),
-        ):
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
         n = self._preview_aggregate_element_count()
         if n is None:
