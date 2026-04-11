@@ -12,7 +12,6 @@ from textual.widgets import (
     Checkbox,
     Input,
     Button,
-    Label,
 )
 from textual.containers import (
     VerticalScroll,
@@ -23,6 +22,7 @@ from textual.containers import (
 )
 from textual.binding import Binding
 from textual.geometry import clamp
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.content import Content
 from textual_plotext import PlotextPlot
@@ -787,7 +787,6 @@ class SavePlotScreen(ModalScreen):
     def _yield_compound_plot_field_widgets(self) -> ComposeResult:
         x_opts, y_opts, h_opts, dx, dy, hf = self._compound_select_params()
         with VerticalGroup(classes="compound-xy-opts"):
-            yield Label("X axis")
             with HorizontalGroup(classes="compound-axis-row"):
                 yield Select(x_opts, id="compound_x", value=dx)
                 yield Checkbox(
@@ -795,7 +794,6 @@ class SavePlotScreen(ModalScreen):
                     value=bool(self._init_compound_log_x),
                     id="compound_log_x",
                 )
-            yield Label("Y axis")
             with HorizontalGroup(classes="compound-axis-row"):
                 yield Select(y_opts, id="compound_y", value=dy)
                 yield Checkbox(
@@ -804,7 +802,6 @@ class SavePlotScreen(ModalScreen):
                     id="compound_log_y",
                 )
         with VerticalGroup(classes="compound-hist-opts"):
-            yield Label("Histogram field")
             yield Select(h_opts, id="compound_hist_field", value=hf)
 
     def compose(self) -> ComposeResult:
@@ -818,13 +815,12 @@ class SavePlotScreen(ModalScreen):
                             f"Histogram · {self._dset_name}", id="save_plot_title"
                         )
                         with VerticalGroup(classes="compound-hist-opts"):
-                            yield Label("Histogram field")
                             yield Select(h_opts, id="compound_hist_field", value=hf)
-                        yield Button(
-                            "Show histogram",
-                            variant="primary",
-                            id="confirm_hist_plot_btn",
-                        )
+                            yield Button(
+                                "Plot",
+                                variant="primary",
+                                id="confirm_hist_plot_btn",
+                            )
             yield Footer()
             return
 
@@ -835,9 +831,7 @@ class SavePlotScreen(ModalScreen):
                     with VerticalGroup():
                         yield Static(f"Plot · {self._dset_name}", id="save_plot_title")
                         yield from self._yield_compound_plot_field_widgets()
-                        yield Button(
-                            "Show plot", variant="primary", id="confirm_plot_btn"
-                        )
+                        yield Button("Plot", variant="primary", id="confirm_plot_btn")
             yield Footer()
             return
 
@@ -859,32 +853,45 @@ class SavePlotScreen(ModalScreen):
                     )
                     if self._is_compound:
                         yield from self._yield_compound_plot_field_widgets()
-                    with HorizontalGroup(classes="hist-opts"):
-                        yield Label("Bins:")
-                        yield Input(
-                            value=str(self._default_bins),
-                            id="save_bins",
-                            placeholder="Bins",
-                            type="integer",
-                        )
+                    yield Input(
+                        value=str(self._default_bins),
+                        id="save_bins",
+                        placeholder="Bins",
+                        type="integer",
+                        classes="hist-opts",
+                    )
                     with HorizontalGroup(classes="line-opts"):
                         yield Checkbox("Lines", value=True, id="line_lines")
                         yield Checkbox("Points", value=False, id="line_points")
                         yield Checkbox(
                             "Smooth (cubic spline)", value=False, id="line_smooth"
                         )
-                    yield Label("Filename", id="save_filename_label")
                     yield Input(value=self._default_filename, id="save_filename")
                     yield Button("Save", variant="primary", id="save_plot_btn")
         yield Footer()
 
+    def _apply_select_border_titles(self) -> None:
+        for sel_id, title in (
+            ("#plot_save_mode", "Plot type"),
+            ("#compound_x", "X axis"),
+            ("#compound_y", "Y axis"),
+            ("#compound_hist_field", "Field"),
+        ):
+            try:
+                self.query_one(sel_id, Select).border_title = title
+            except NoMatches:
+                pass
+
     def on_mount(self) -> None:
         self._set_mode_class()
+        self._apply_select_border_titles()
         if self._histogram_settings_only:
             self.query_one("#compound_hist_field", Select).focus()
         elif self._plot_settings_only:
             self.query_one("#compound_x", Select).focus()
         else:
+            self.query_one("#save_bins", Input).border_title = "Bins"
+            self.query_one("#save_filename", Input).border_title = "Filename"
             self.query_one("#save_filename", Input).focus()
 
     @staticmethod

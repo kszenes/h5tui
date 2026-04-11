@@ -181,7 +181,7 @@ GroupFindScreen #group-find-dialog {
   min-width: 30;
   height: auto;
   border: tall $accent 50%;
-  border-title-align: left;
+  border-title-align: center;
   border-title-style: bold;
   border-title-color: $foreground 78%;
   background: $surface;
@@ -197,6 +197,10 @@ GroupFindScreen #group_find_input {
   background: $panel;
   color: $text;
   border: none;
+}
+
+AttributeScreen MyOptionList {
+  border-title-align: center;
 }
 
 /* Modal shells: identical outer size for attributes, summary, and save-plot. */
@@ -317,28 +321,43 @@ SavePlotScreen #save_plot_scroll {
 #save_plot_title {
   margin: 0 0 1 0;
   text-style: bold;
+  content-align: center middle;
+  width: 100%;
 }
 
-/* Match file-tree vibe: subtle rule when idle, stronger when focused (cf. dirs-parent vs current). */
+/* Border + title on ``Select``; ``SelectCurrent`` is flush inside (no double frame).
+   Textual's default border_title_color is effectively invisible; without an explicit
+   ``border-title-color``, titles pick up the dim border ($foreground 12%) and are unreadable. */
 #save-plot-dialog Select {
   width: 100%;
   height: auto;
   min-height: 3;
   margin: 0 0 1 0;
+  border: tall $foreground 12%;
+  background: $panel;
+  border-title-align: left;
+  border-title-style: bold;
+  border-title-color: $foreground 82%;
 }
 
 #save-plot-dialog Select > SelectCurrent {
-  border: tall $foreground 12%;
-  background: $panel;
+  border: none;
+  background: transparent;
 }
 
 #save-plot-dialog Select > SelectCurrent Static#label {
   content-align: center middle;
 }
 
-#save-plot-dialog Select:focus > SelectCurrent {
+#save-plot-dialog Select:focus {
   border: tall $foreground 45%;
   background-tint: $foreground 6%;
+  border-title-color: $foreground;
+}
+
+#save-plot-dialog Select:focus > SelectCurrent {
+  border: none;
+  background: transparent;
 }
 
 #save-plot-dialog .hist-opts,
@@ -350,18 +369,15 @@ SavePlotScreen #save_plot_scroll {
   border: tall $foreground 12%;
   background: $panel;
   padding: 0 1;
+  border-title-style: bold;
+  border-title-color: $foreground 82%;
 }
 
 #save-plot-dialog .hist-opts:focus-within,
 #save-plot-dialog .line-opts:focus-within {
   border: tall $foreground 45%;
   background-tint: $foreground 4%;
-}
-
-#save-plot-dialog .hist-opts Label {
-  content-align: center middle;
-  width: auto;
-  margin: 0 1 0 0;
+  border-title-color: $foreground;
 }
 
 #save-plot-dialog .line-opts Checkbox {
@@ -396,11 +412,9 @@ SavePlotScreen #save_plot_scroll {
 }
 
 #save_bins {
-  width: 1fr;
+  width: 100%;
   height: 3;
   min-height: 3;
-  border: tall $foreground 12%;
-  background: $panel;
 }
 
 #save_bins:focus {
@@ -416,14 +430,19 @@ SavePlotScreen #save_plot_scroll {
   border: tall $foreground 12%;
   background: $panel;
   border-title-align: left;
+  border-title-style: bold;
+  border-title-color: $foreground 82%;
 }
 
 #save_filename:focus {
   border: tall $foreground 45%;
   background-tint: $foreground 6%;
+  border-title-color: $foreground;
 }
 
-#save_plot_btn {
+#save_plot_btn,
+#confirm_plot_btn,
+#confirm_hist_plot_btn {
   width: 100%;
   height: 3;
   min-height: 3;
@@ -432,7 +451,9 @@ SavePlotScreen #save_plot_scroll {
   border: tall $foreground 12%;
 }
 
-#save_plot_btn:focus {
+#save_plot_btn:focus,
+#confirm_plot_btn:focus,
+#confirm_hist_plot_btn:focus {
   border: tall $foreground 45%;
   background-tint: $foreground 8%;
 }

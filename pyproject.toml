@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "h5tui"
-requires-python = ">=3.8.0"
+requires-python = ">=3.8.1"
 dynamic = ["version"]
 dependencies = [
   "textual",
@@ -43,6 +43,7 @@ version = {attr = "h5tui.__version__"}
 dev = [
   "pytest>=7",
   "pytest-asyncio>=0.23",
+  "pytest-textual-snapshot>=1.0.0",
 ]
 
 [tool.pytest.ini_options]
