@@ -1672,6 +1672,7 @@ class MyDataTable(DataTable):
 
     def __init__(self, id):
         super().__init__(id=id)
+        self.zebra_stripes = True
 
     def action_jump_up(self) -> None:
         self._set_hover_cursor(False)
