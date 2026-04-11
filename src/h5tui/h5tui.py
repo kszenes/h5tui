@@ -515,7 +515,46 @@ def _open_saved_plot_path(path: str) -> None:
         pass
 
 
-def _save_1d_histogram_mpl(path: str, data: np.ndarray, bins: int) -> None:
+_RELATIVE_PLOT_SAVE_DIR = "figures"
+
+
+def _resolve_plot_save_output_path(user_input: str) -> str:
+    """Map the save dialog value to a path on disk.
+
+    A bare filename (no directory) is written under ``figures/``, which is created
+    if needed. Relative paths with a directory and absolute paths are unchanged.
+    """
+    p = os.path.expanduser(user_input.strip())
+    if not p:
+        return p
+    if os.path.isabs(p):
+        return os.path.normpath(p)
+    if os.path.dirname(p):
+        return os.path.normpath(p)
+    os.makedirs(_RELATIVE_PLOT_SAVE_DIR, exist_ok=True)
+    base = os.path.basename(p) or "plot.pdf"
+    return os.path.normpath(os.path.join(_RELATIVE_PLOT_SAVE_DIR, base))
+
+
+def _format_plot_save_toast_path(output_path: str) -> str:
+    """Human-readable path for the save notification (forward slashes, often ``figures/...``)."""
+    ap = os.path.abspath(os.path.expanduser(output_path))
+    try:
+        rel = os.path.relpath(ap, os.getcwd())
+    except ValueError:
+        rel = ap
+    return rel.replace(os.sep, "/")
+
+
+def _mpl_set_dataset_title(ax, dset_name: str) -> None:
+    """Set the figure title from the HDF5 dataset basename (or a short fallback)."""
+    name = str(dset_name).strip()
+    ax.set_title(name if name else "dataset")
+
+
+def _save_1d_histogram_mpl(
+    path: str, data: np.ndarray, bins: int, *, dset_name: str
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -524,6 +563,7 @@ def _save_1d_histogram_mpl(path: str, data: np.ndarray, bins: int) -> None:
     vals = np.asarray(data, dtype=np.float64).ravel()
     vals = vals[np.isfinite(vals)]
     fig, ax = plt.subplots(figsize=(8, 4.5))
+    _mpl_set_dataset_title(ax, dset_name)
     if vals.size:
         ax.hist(vals, bins=max(1, int(bins)), color="steelblue", edgecolor="black")
     ax.set_xlabel("Value")
@@ -541,6 +581,7 @@ def _save_1d_lineplot_mpl(
     show_lines: bool,
     show_points: bool,
     show_smooth: bool,
+    dset_name: str,
 ) -> None:
     import matplotlib
 
@@ -551,6 +592,7 @@ def _save_1d_lineplot_mpl(
     n = int(y.shape[0])
     x = np.arange(n, dtype=float)
     fig, ax = plt.subplots(figsize=(8, 4.5))
+    _mpl_set_dataset_title(ax, dset_name)
     if not (show_lines or show_points or show_smooth):
         ax.text(0.5, 0.5, "No display option selected", ha="center", va="center")
     else:
@@ -640,6 +682,7 @@ def _save_compound_lineplot_mpl(
     show_lines: bool,
     show_points: bool,
     show_smooth: bool,
+    dset_name: str,
 ) -> None:
     import matplotlib
 
@@ -651,6 +694,7 @@ def _save_compound_lineplot_mpl(
     xlab = "Index" if x_key == COMPOUND_PLOT_INDEX else str(x_key)
     ylab = str(y_key)
     fig, ax = plt.subplots(figsize=(8, 4.5))
+    _mpl_set_dataset_title(ax, dset_name)
     if log_x:
         ax.set_xscale("log")
     if log_y:
@@ -681,7 +725,7 @@ def _save_compound_lineplot_mpl(
 
 
 def _save_compound_histogram_mpl(
-    path: str, rec: np.ndarray, field: str, bins: int
+    path: str, rec: np.ndarray, field: str, bins: int, *, dset_name: str
 ) -> None:
     import matplotlib
 
@@ -691,6 +735,7 @@ def _save_compound_histogram_mpl(
     vals = _compound_field_float1d(rec, field)
     vals = vals[np.isfinite(vals)]
     fig, ax = plt.subplots(figsize=(8, 4.5))
+    _mpl_set_dataset_title(ax, dset_name)
     if vals.size:
         ax.hist(vals, bins=max(1, int(bins)), color="steelblue", edgecolor="black")
     ax.set_xlabel(str(field))
@@ -701,8 +746,51 @@ def _save_compound_histogram_mpl(
     _open_saved_plot_path(path)
 
 
+def _save_2d_heatmap_mpl(path: str, data: np.ndarray, *, dset_name: str) -> None:
+    """Write a 2D numeric grid as ``imshow`` + colorbar (matches in-terminal heatmap style)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    z = np.asarray(data)
+    if np.issubdtype(z.dtype, np.complexfloating):
+        z = np.abs(z)
+    zf = np.asarray(z, dtype=np.float64)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    _mpl_set_dataset_title(ax, dset_name)
+    im = ax.imshow(
+        zf,
+        aspect="auto",
+        origin="upper",
+        cmap="viridis",
+        interpolation="nearest",
+    )
+    ax.set_xlabel("Column")
+    ax.set_ylabel("Row")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+    fig.tight_layout()
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
+    _open_saved_plot_path(path)
+
+
+def is_plain_numeric_2d_grid(arr: np.ndarray) -> bool:
+    """Plain (non-record) 2D scalar grid plottable as a heatmap; excludes ``object``.
+
+    Degenerate shapes that ``numpy.squeeze`` to 1D (e.g. ``(N, 1)``) are excluded so
+    they follow the 1D save path, matching :func:`is_plotable`.
+    """
+    a = np.asarray(arr)
+    if a.dtype.fields is not None or a.dtype == np.dtype("O") or a.size == 0:
+        return False
+    if len(a.dtype) != 0:
+        return False
+    return np.squeeze(a).ndim == 2
+
+
 class SavePlotScreen(ModalScreen):
-    """Save 1D dataset as PDF: histogram or line plot (matplotlib).
+    """Save dataset as PDF via matplotlib: 1D line/histogram, compound line/histogram, or 2D heatmap.
 
     Compound 1D datasets: line plot with X/Y field choosers and optional log axes;
     histogram uses one numeric field.
@@ -726,12 +814,18 @@ class SavePlotScreen(ModalScreen):
         compound_log_y: bool = False,
         plot_settings_only: bool = False,
         histogram_settings_only: bool = False,
+        heatmap_2d: bool = False,
         id=None,
     ) -> None:
         super().__init__(id=id)
         self._data = np.asarray(data)
         self._dset_name = dset_name
-        self._is_compound = self._data.dtype.fields is not None and self._data.ndim == 1
+        self._heatmap_2d = bool(heatmap_2d and is_plain_numeric_2d_grid(self._data))
+        self._is_compound = (
+            not self._heatmap_2d
+            and self._data.dtype.fields is not None
+            and self._data.ndim == 1
+        )
         self._histogram_settings_only = (
             bool(histogram_settings_only) and self._is_compound
         )
@@ -805,6 +899,19 @@ class SavePlotScreen(ModalScreen):
             yield Select(h_opts, id="compound_hist_field", value=hf)
 
     def compose(self) -> ComposeResult:
+        if self._heatmap_2d:
+            dlg_classes = "mode-heatmap2d"
+            with Vertical(id="save-plot-dialog", classes=dlg_classes):
+                with VerticalScroll(id="save_plot_scroll"):
+                    with VerticalGroup():
+                        yield Static(
+                            f"Save 2D plot · {self._dset_name}", id="save_plot_title"
+                        )
+                        yield Input(value=self._default_filename, id="save_filename")
+                        yield Button("Save", variant="primary", id="save_plot_btn")
+            yield Footer()
+            return
+
         if self._histogram_settings_only:
             _, _, h_opts, _, _, hf = self._compound_select_params()
             dlg_classes = "mode-histogram compound-dataset histogram-settings-only"
@@ -885,6 +992,10 @@ class SavePlotScreen(ModalScreen):
     def on_mount(self) -> None:
         self._set_mode_class()
         self._apply_select_border_titles()
+        if self._heatmap_2d:
+            self.query_one("#save_filename", Input).border_title = "Filename"
+            self.query_one("#save_filename", Input).focus()
+            return
         if self._histogram_settings_only:
             self.query_one("#compound_hist_field", Select).focus()
         elif self._plot_settings_only:
@@ -906,6 +1017,8 @@ class SavePlotScreen(ModalScreen):
         return "lineplot"
 
     def _mode(self) -> str:
+        if getattr(self, "_heatmap_2d", False):
+            return "heatmap2d"
         if getattr(self, "_histogram_settings_only", False):
             return "histogram"
         if getattr(self, "_plot_settings_only", False):
@@ -915,6 +1028,9 @@ class SavePlotScreen(ModalScreen):
 
     def _set_mode_class(self, mode: str | None = None) -> None:
         dlg = self.query_one("#save-plot-dialog", Vertical)
+        if getattr(self, "_heatmap_2d", False):
+            dlg.set_classes("mode-heatmap2d")
+            return
         if mode is None:
             mode = self._mode()
         parts = [f"mode-{mode}"]
@@ -982,9 +1098,19 @@ class SavePlotScreen(ModalScreen):
 
     @on(Button.Pressed, "#save_plot_btn")
     def _on_save_pressed(self) -> None:
-        path = self.query_one("#save_filename", Input).value.strip()
-        if not path:
+        path_in = self.query_one("#save_filename", Input).value.strip()
+        if not path_in:
             self.app.notify("Enter a filename", severity="warning", timeout=2)
+            return
+        out_path = _resolve_plot_save_output_path(path_in)
+        toast_path = _format_plot_save_toast_path(out_path)
+        if self._heatmap_2d:
+            try:
+                _save_2d_heatmap_mpl(out_path, self._data, dset_name=self._dset_name)
+                self.app.notify(f"Saved to {toast_path}", timeout=3)
+                self.app.pop_screen()
+            except OSError as e:
+                self.app.notify(f"Could not save: {e}", severity="error", timeout=8)
             return
         mode = self._mode()
         try:
@@ -1005,7 +1131,9 @@ class SavePlotScreen(ModalScreen):
                             "Select a histogram field", severity="warning", timeout=2
                         )
                         return
-                    _save_compound_histogram_mpl(path, self._data, str(hf), bins)
+                    _save_compound_histogram_mpl(
+                        out_path, self._data, str(hf), bins, dset_name=self._dset_name
+                    )
                 else:
                     lines = self.query_one("#line_lines", Checkbox).value
                     points = self.query_one("#line_points", Checkbox).value
@@ -1020,7 +1148,7 @@ class SavePlotScreen(ModalScreen):
                     xk = str(self.query_one("#compound_x", Select).value)
                     yk = str(self.query_one("#compound_y", Select).value)
                     _save_compound_lineplot_mpl(
-                        path,
+                        out_path,
                         self._data,
                         x_key=xk,
                         y_key=yk,
@@ -1029,6 +1157,7 @@ class SavePlotScreen(ModalScreen):
                         show_lines=lines,
                         show_points=points,
                         show_smooth=smooth,
+                        dset_name=self._dset_name,
                     )
             elif mode == "histogram":
                 try:
@@ -1037,7 +1166,9 @@ class SavePlotScreen(ModalScreen):
                     self.app.notify("Invalid bin count", severity="warning", timeout=2)
                     return
                 bins = max(1, bins)
-                _save_1d_histogram_mpl(path, self._data, bins)
+                _save_1d_histogram_mpl(
+                    out_path, self._data, bins, dset_name=self._dset_name
+                )
             else:
                 lines = self.query_one("#line_lines", Checkbox).value
                 points = self.query_one("#line_points", Checkbox).value
@@ -1050,13 +1181,14 @@ class SavePlotScreen(ModalScreen):
                     )
                     return
                 _save_1d_lineplot_mpl(
-                    path,
+                    out_path,
                     self._data,
                     show_lines=lines,
                     show_points=points,
                     show_smooth=smooth,
+                    dset_name=self._dset_name,
                 )
-            self.app.notify(f"Saved to {path}", timeout=3)
+            self.app.notify(f"Saved to {toast_path}", timeout=3)
             self.app.pop_screen()
         except OSError as e:
             self.app.notify(f"Could not save: {e}", severity="error", timeout=8)
@@ -3929,8 +4061,8 @@ class H5TUIApp(App):
                     timeout=2,
                 )
 
-    def _get_1d_save_plot_context(self) -> tuple[np.ndarray | None, str | None]:
-        """Return 1D data for save dialog and basename for default ``{{name}}.pdf``."""
+    def _get_save_plot_context(self) -> tuple[np.ndarray | None, str | None]:
+        """Return array data for the save dialog and basename for default ``{{name}}.pdf``."""
         path: str | None = None
         data_arr = None
 
@@ -3938,9 +4070,12 @@ class H5TUIApp(App):
             path = self._open_dataset_path
             if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
                 dset = self._file[self._lazy_dset_path]
-                if dset.ndim != 1:
+                if dset.ndim == 1:
+                    data_arr = sample_dset_for_plot_1d(dset)
+                elif dset.ndim == 2 and is_plotable_lazy_dset(dset):
+                    data_arr = sample_dset_for_plot_2d(dset)
+                else:
                     return None, None
-                data_arr = sample_dset_for_plot_1d(dset)
             else:
                 data_arr = self._data
         elif self.has_class("view-plot") and self._data is not None:
@@ -3951,9 +4086,27 @@ class H5TUIApp(App):
             if path is None:
                 return None, None
             try:
-                data_arr = np.asarray(self._file[path][...])
+                node = self._file[path]
             except Exception:
                 return None, None
+            if not isinstance(node, h5py.Dataset):
+                return None, None
+            dset = node
+            if dset.ndim == 1:
+                try:
+                    data_arr = np.asarray(dset[...])
+                except Exception:
+                    return None, None
+            elif dset.ndim == 2 and is_plotable_lazy_dset(dset):
+                try:
+                    data_arr = sample_dset_for_plot_2d(dset)
+                except Exception:
+                    return None, None
+            else:
+                try:
+                    data_arr = np.asarray(dset[...])
+                except Exception:
+                    return None, None
 
         if data_arr is None:
             return None, None
@@ -3961,6 +4114,10 @@ class H5TUIApp(App):
         if arr.dtype.fields is not None:
             if arr.ndim != 1 or not has_compound_plot_fields(arr.dtype):
                 return None, None
+            base = (path or "plot").rstrip("/")
+            name = os.path.basename(base) or "plot"
+            return arr, name
+        if is_plain_numeric_2d_grid(arr):
             base = (path or "plot").rstrip("/")
             name = os.path.basename(base) or "plot"
             return arr, name
@@ -4266,14 +4423,14 @@ class H5TUIApp(App):
         self.refresh_bindings()
 
     def action_save_plot(self) -> None:
-        """Open save dialog for 1D numeric or compound data (``s``)."""
+        """Open save dialog for 1D / compound / 2D plottable data (``s``)."""
         if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
         self._clear_group_find_sticky()
-        data, name = self._get_1d_save_plot_context()
+        data, name = self._get_save_plot_context()
         if data is None or name is None:
             self.notify(
-                "Select or open a 1D plottable dataset to save as a plot",
+                "Select or open a plottable dataset (1D or 2D) to save as a plot",
                 severity="warning",
                 timeout=3,
             )
@@ -4289,6 +4446,8 @@ class H5TUIApp(App):
                     compound_log_y=self._compound_plot_log_y,
                 )
             )
+        elif is_plain_numeric_2d_grid(data):
+            self.push_screen(SavePlotScreen(data, name, heatmap_2d=True))
         else:
             self.push_screen(SavePlotScreen(data, name))
 
