@@ -1466,7 +1466,7 @@ _LARGE_AGGREGATE_ELEMENT_THRESHOLD = 10_000_000
 # Double-press confirm window: ``App.notify`` timeout and ``set_timer`` (message pump).
 _LARGE_CONFIRM_WINDOW_SEC = 4.0
 
-# Above this element count, keep the ``h5py.Dataset`` and read slices (plain dtypes only).
+# Above this element count, keep the ``h5py.Dataset`` and read slices (plain numeric or 1D vlen strings).
 LAZY_THRESHOLD = MAX_TABLE_ELEMENTS
 # Plot sampling for lazy datasets (terminal plot is downsampled).
 _PLOT_MAX_1D = 20_000
@@ -1627,9 +1627,11 @@ def should_use_ndarray_datatable(arr) -> bool:
 
 
 def _lazy_dataset_eligible(dset: h5py.Dataset) -> bool:
-    """Large arrays: plain numeric (lazy), or 1D compound with named fields (lazy table)."""
+    """Large arrays: plain numeric, 1D vlen strings, or 1D compound — lazy table slices."""
     if int(dset.size) <= LAZY_THRESHOLD:
         return False
+    if dset.ndim == 1 and dset.dtype == np.dtype("O"):
+        return True
     if len(dset.dtype) == 0 and dset.dtype != np.dtype("O"):
         return True
     return _lazy_h5_structured_1d_datatable(dset)
@@ -1644,8 +1646,12 @@ def _lazy_h5_structured_1d_datatable(dset: h5py.Dataset) -> bool:
 
 
 def _lazy_h5_plain_1d_datatable(dset: h5py.Dataset) -> bool:
-    """1D plain element dtype — fill DataTable from slices without full load."""
-    return len(dset.dtype) == 0 and dset.dtype != np.dtype("O") and dset.ndim == 1
+    """1D plain numeric, fixed strings, or HDF5 variable-length strings (numpy ``object``)."""
+    if dset.ndim != 1 or dset.dtype.fields is not None:
+        return False
+    if dset.dtype == np.dtype("O"):
+        return True
+    return len(dset.dtype) == 0
 
 
 def _lazy_h5_plain_2d_datatable(dset: h5py.Dataset) -> bool:
@@ -1790,7 +1796,11 @@ def format_1d_with_indices_lazy(dset: h5py.Dataset) -> str:
 
 def format_ndarray_text_lazy(dset: h5py.Dataset, *, line_width: int) -> str:
     """Abbreviated text for a large on-disk dataset without loading it entirely."""
-    if len(dset.dtype) != 0 or dset.dtype == np.dtype("O"):
+    if dset.dtype.fields is not None:
+        return "(unsupported dtype for text preview)"
+    if dset.dtype == np.dtype("O"):
+        if dset.ndim == 1:
+            return format_1d_with_indices_lazy(dset)
         return "(unsupported dtype for text preview)"
     if dset.ndim == 1:
         return format_1d_with_indices_lazy(dset)
@@ -2031,8 +2041,13 @@ class ColumnContent(VerticalScroll):
                 except Exception as e:
                     self.notify(f"Could not read dataset: {e}", severity="error")
                     return
+                extra = (
+                    " — vlen UTF-8 strings, row window"
+                    if dset.dtype == np.dtype("O")
+                    else ""
+                )
                 self.notify(
-                    "keys: j/k row; J/K jump ±10; y copy; esc quit",
+                    f"keys: j/k row; J/K jump ±10; y copy; esc quit{extra}",
                     timeout=5,
                 )
                 self._df.focus()
