@@ -2787,6 +2787,8 @@ class H5TUIApp(App):
             print(f"Could not open HDF5 file: {e}", file=sys.stderr)
             sys.exit(1)
 
+        self.title = f"h5tui · {os.path.basename(fname)}"
+
         self._cur_dir = str(self._file.name)
 
         # One index per descent into a group (keyboard ``l``): used to restore the
