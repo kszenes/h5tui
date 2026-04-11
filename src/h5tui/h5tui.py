@@ -22,6 +22,7 @@ from textual.containers import (
     HorizontalGroup,
 )
 from textual.binding import Binding
+from textual.geometry import clamp
 from textual.screen import ModalScreen
 from textual.content import Content
 from textual_plotext import PlotextPlot
@@ -1915,7 +1916,42 @@ class MyOptionList(OptionList):
         Binding("up,k", "cursor_up", "Up", show=True),
         Binding("G", "page_down", "Bottom", show=False),
         Binding("g", "page_up", "Top", show=False),
+        Binding("ctrl+u,u", "half_page_up", "Half page up", show=False),
+        Binding("ctrl+d,d", "half_page_down", "Half page down", show=False),
     ]
+
+    def _move_half_page(self, direction: int) -> None:
+        """Move the highlight by roughly half a viewport (same idea as ``OptionList._move_page``)."""
+        if not self._options:
+            return
+        height = self.scrollable_content_region.height
+        step = max(1, height // 2)
+        y = clamp(
+            self._index_to_line[self.highlighted or 0] + direction * step,
+            0,
+            len(self._lines) - 1,
+        )
+        option_index = self._lines[y][0]
+        self.highlighted = _widget_navigation.find_next_enabled_no_wrap(
+            candidates=self._options,
+            anchor=option_index,
+            direction=direction,
+            with_anchor=True,
+        )
+
+    def action_half_page_up(self) -> None:
+        self.refresh_bindings()
+        if self.highlighted is None:
+            self.action_first()
+        else:
+            self._move_half_page(-1)
+
+    def action_half_page_down(self) -> None:
+        self.refresh_bindings()
+        if self.highlighted is None:
+            self.action_last()
+        else:
+            self._move_half_page(1)
 
     def action_cursor_down(self) -> None:
         self.refresh_bindings()
@@ -1940,9 +1976,12 @@ class MyOptionList(OptionList):
             self.highlighted = next_h
 
     def check_action(self, action, parameters):
-        if action in ["cursor_down", "cursor_up"] and self.app.has_class(
-            "view-dataset"
-        ):
+        if action in (
+            "cursor_down",
+            "cursor_up",
+            "half_page_up",
+            "half_page_down",
+        ) and self.app.has_class("view-dataset"):
             return False
         else:
             return True
@@ -2862,7 +2901,12 @@ class H5TUIApp(App):
         ):
             # DataTable owns J/K for ±10 row jump; do not run app handler.
             return False
-        elif action in ["cursor_down", "cursor_up"] and self.has_class("view-dataset"):
+        elif action in (
+            "cursor_down",
+            "cursor_up",
+            "half_page_up",
+            "half_page_down",
+        ) and self.has_class("view-dataset"):
             return False
         elif (
             action in ("goto_parent", "goto_child")
