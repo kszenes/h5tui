@@ -223,41 +223,21 @@ SavePlotScreen #save-plot-dialog {
   padding: 1 2;
 }
 
+/* Same canvas as main preview (#content): summary table matches #dtable theme defaults. */
+DatasetSummaryScreen #summary_dialog {
+  background: $boost;
+}
+
 DatasetSummaryScreen #summary_modal_title {
   text-style: bold;
   content-align: center middle;
   margin: 0 0 1 0;
 }
 
-DatasetSummaryScreen #summary_stat_scroll {
+DatasetSummaryScreen #summary_datatable {
   height: 1fr;
-  min-height: 6;
-}
-
-DatasetSummaryScreen #summary_stat_grid {
-  height: auto;
+  min-height: 8;
   width: 100%;
-  layout: vertical;
-}
-
-DatasetSummaryScreen .summary-stat-row {
-  width: 100%;
-  height: auto;
-  layout: horizontal;
-}
-
-DatasetSummaryScreen .summary-stat-box {
-  width: 1fr;
-  height: auto;
-  /* Narrow enough for four cards across on small modals (avoids clipping Min). */
-  min-width: 8;
-  border: tall $secondary;
-  border-title-align: center;
-  border-title-style: bold;
-  border-title-color: $accent;
-  background: $panel;
-  padding: 0 1 1 1;
-  margin: 0 1 1 0;
 }
 
 #dialog {

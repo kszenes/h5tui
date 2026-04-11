@@ -1202,22 +1202,103 @@ def _format_stat_index(arr: np.ndarray, flat_index: int) -> str:
     return "(" + ", ".join(str(int(x)) for x in t) + ")"
 
 
+# Wide rows: ``(field_header, mean, var, std, l2, max, max_idx, min, min_idx)`` — one tuple
+# per field / column; transposed so columns are fields and row labels are stat names.
+_SUMMARY_STAT_LABELS = (
+    "Mean",
+    "Var",
+    "Std",
+    "L2 norm",
+    "Max",
+    "Max idx",
+    "Min",
+    "Min idx",
+)
+
+
+def _summary_wide_row_from_streaming_stats(
+    st: dict[str, float], *, field: str
+) -> tuple[str, ...]:
+    """One wide row for chunked HDF5 stats (min/max index not tracked per chunk)."""
+    idx_placeholder = "— (chunked scan)"
+    return (
+        field,
+        f"{float(st['mean']):.5g}",
+        f"{float(st['var']):.5g}",
+        f"{float(st['std']):.5g}",
+        f"{float(st['L2 norm']):.5g}",
+        f"{float(st['max']):.5g}",
+        idx_placeholder,
+        f"{float(st['min']):.5g}",
+        idx_placeholder,
+    )
+
+
+def _summary_wide_row_from_plain_ndarray(arr: np.ndarray) -> tuple[str, ...]:
+    """Single full-array summary; column header is ``value`` (whole dataset)."""
+    flat_max = int(np.argmax(arr))
+    flat_min = int(np.argmin(arr))
+    return (
+        "value",
+        f"{float(np.mean(arr)):.5g}",
+        f"{float(np.var(arr)):.5g}",
+        f"{float(np.std(arr)):.5g}",
+        f"{float(np.linalg.norm(arr)):.5g}",
+        f"{float(np.max(arr)):.5g}",
+        _format_stat_index(arr, flat_max),
+        f"{float(np.min(arr)):.5g}",
+        _format_stat_index(arr, flat_min),
+    )
+
+
+def _summary_wide_row_from_compound_field_column(
+    field: str, col: np.ndarray
+) -> tuple[str, ...]:
+    arr = np.asarray(col, dtype=np.float64)
+    flat_max = int(np.argmax(arr))
+    flat_min = int(np.argmin(arr))
+    return (
+        field,
+        f"{float(np.mean(arr)):.5g}",
+        f"{float(np.var(arr)):.5g}",
+        f"{float(np.std(arr)):.5g}",
+        f"{float(np.linalg.norm(arr)):.5g}",
+        f"{float(np.max(arr)):.5g}",
+        str(flat_max),
+        f"{float(np.min(arr)):.5g}",
+        str(flat_min),
+    )
+
+
+def _transpose_summary_wide_rows(
+    wide_rows: list[tuple[str, ...]],
+) -> tuple[tuple[str, ...], list[tuple[str, tuple[str, ...]]]]:
+    """Field-major wide rows -> column headers and (stat label, cells) per row."""
+    if not wide_rows:
+        return (), []
+    ncol_stats = len(_SUMMARY_STAT_LABELS)
+    assert len(wide_rows[0]) == ncol_stats + 1
+    columns = tuple(r[0] for r in wide_rows)
+    body: list[tuple[str, tuple[str, ...]]] = []
+    for si in range(ncol_stats):
+        label = _SUMMARY_STAT_LABELS[si]
+        cells = tuple(r[si + 1] for r in wide_rows)
+        body.append((label, cells))
+    return columns, body
+
+
 class DatasetSummaryScreen(ModalScreen):
-    """Modal stat cards: border title + value ``Static`` (Textual defaults for layout)."""
+    """Summary modal: fields as columns, statistics as rows (row labels), like dataset tables."""
 
     BINDINGS = [
         Binding(
-            "left,h,escape,q",
+            "escape,q",
             "quit_summary",
             "Close",
             show=True,
             priority=True,
         ),
         Binding("Q", "quit_application", "Quit app", show=True, priority=True),
-        Binding("J", "scroll_summary_down", "Scroll down", priority=True),
-        Binding("K", "scroll_summary_up", "Scroll up", priority=True),
-        Binding("u", "scroll_summary_page_up", "Page up", priority=True),
-        Binding("d", "scroll_summary_page_down", "Page down", priority=True),
     ]
 
     def __init__(
@@ -1225,89 +1306,66 @@ class DatasetSummaryScreen(ModalScreen):
         data: np.ndarray | None = None,
         *,
         streaming_stats: dict[str, float] | None = None,
+        streaming_stats_by_field: dict[str, dict[str, float]] | None = None,
         id=None,
     ) -> None:
         super().__init__(id=id)
+        n_sources = sum(
+            1
+            for x in (data, streaming_stats, streaming_stats_by_field)
+            if x is not None
+        )
+        if n_sources != 1:
+            raise ValueError(
+                "DatasetSummaryScreen requires exactly one of data, streaming_stats, "
+                "streaming_stats_by_field"
+            )
+        wide: list[tuple[str, ...]] = []
         if streaming_stats is not None:
-            st = streaming_stats
-            self._stat_rows = [
-                [
-                    ("Mean", f"{float(st['mean']):.5g}"),
-                    ("Var", f"{float(st['var']):.5g}"),
-                    ("Std", f"{float(st['std']):.5g}"),
-                    ("L2 norm", f"{float(st['L2 norm']):.5g}"),
-                ],
-                [
-                    ("Max", f"{float(st['max']):.5g}"),
-                    ("Max idx", "— (chunked scan)"),
-                    ("Min", f"{float(st['min']):.5g}"),
-                    ("Min idx", "— (chunked scan)"),
-                ],
-            ]
-            return
-        if data is None:
-            raise ValueError("DatasetSummaryScreen requires data or streaming_stats")
-        arr = np.asarray(data)
-        flat_max = int(np.argmax(arr))
-        flat_min = int(np.argmin(arr))
-        # Row 1: moments / norms; row 2: extrema and indices (same ddof as ``np.std``).
-        self._stat_rows: list[list[tuple[str, str]]] = [
-            [
-                ("Mean", f"{float(np.mean(arr)):.5g}"),
-                ("Var", f"{float(np.var(arr)):.5g}"),
-                ("Std", f"{float(np.std(arr)):.5g}"),
-                ("L2 norm", f"{float(np.linalg.norm(arr)):.5g}"),
-            ],
-            [
-                ("Max", f"{float(np.max(arr)):.5g}"),
-                ("Max idx", _format_stat_index(arr, flat_max)),
-                ("Min", f"{float(np.min(arr)):.5g}"),
-                ("Min idx", _format_stat_index(arr, flat_min)),
-            ],
-        ]
+            wide.append(
+                _summary_wide_row_from_streaming_stats(streaming_stats, field="value")
+            )
+        elif streaming_stats_by_field is not None:
+            for fname, st in streaming_stats_by_field.items():
+                wide.append(
+                    _summary_wide_row_from_streaming_stats(st, field=str(fname))
+                )
+        else:
+            assert data is not None
+            arr = np.asarray(data)
+            if arr.dtype.fields is not None and arr.ndim == 1:
+                for fname in dtype_numeric_field_names(arr.dtype):
+                    wide.append(
+                        _summary_wide_row_from_compound_field_column(
+                            str(fname), arr[fname]
+                        )
+                    )
+            else:
+                wide.append(_summary_wide_row_from_plain_ndarray(arr))
+        self._summary_columns, self._summary_stat_rows = _transpose_summary_wide_rows(
+            wide
+        )
 
     def compose(self) -> ComposeResult:
         with Vertical(id="summary_dialog"):
             yield Static("Summary", id="summary_modal_title")
-            with VerticalScroll(id="summary_stat_scroll"):
-                with VerticalGroup(id="summary_stat_grid"):
-                    for row in self._stat_rows:
-                        # ``Horizontal`` / ``Vertical`` default to ``height: 1fr`` and stretch
-                        # rows to fill the scroll viewport; ``*Group`` uses ``height: auto``.
-                        with HorizontalGroup(classes="summary-stat-row"):
-                            for title, value in row:
-                                box = VerticalGroup(
-                                    Static(
-                                        value,
-                                        classes="summary-stat-value",
-                                        markup=False,
-                                    ),
-                                    classes="summary-stat-box",
-                                )
-                                box.border_title = title
-                                yield box
+            yield MyDataTable(id="summary_datatable")
         yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one("#summary_datatable", MyDataTable)
+        table.clear(columns=True)
+        table.add_columns(*self._summary_columns)
+        for stat_label, cells in self._summary_stat_rows:
+            table.add_row(*cells, label=stat_label)
+        table.cursor_type = "cell"
+        table.focus()
 
     def action_quit_summary(self) -> None:
         self.app.pop_screen()
 
     def action_quit_application(self) -> None:
         self.app.exit()
-
-    def _summary_scroll(self) -> VerticalScroll:
-        return self.query_one("#summary_stat_scroll", VerticalScroll)
-
-    def action_scroll_summary_down(self) -> None:
-        self._summary_scroll().scroll_down()
-
-    def action_scroll_summary_up(self) -> None:
-        self._summary_scroll().scroll_up()
-
-    def action_scroll_summary_page_down(self) -> None:
-        self._summary_scroll().scroll_page_down()
-
-    def action_scroll_summary_page_up(self) -> None:
-        self._summary_scroll().scroll_page_up()
 
 
 class JumpToLineScreen(ModalScreen):
@@ -1465,12 +1523,22 @@ def _scalar_clipboard_str(value: object) -> str:
 
 def _dt_row_label_plain(dt: DataTable, row_index: int) -> str:
     rk = dt.ordered_rows[row_index]
-    lab = dt.rows[rk].label
-    return lab.plain if lab is not None else ""
+    # Textual 8+: ``ordered_rows`` holds ``Row`` objects (``.label`` on the row);
+    # older versions used row keys only (look up ``dt.rows[key]``).
+    lab = getattr(rk, "label", None)
+    if lab is not None:
+        return lab.plain if hasattr(lab, "plain") else str(lab)
+    row_key = getattr(rk, "key", rk)
+    inner = dt.rows[row_key].label
+    return inner.plain if inner is not None else ""
 
 
 def _dt_col_label_plain(dt: DataTable, col_index: int) -> str:
     ck = dt.ordered_columns[col_index]
+    # Textual 8+: ``ordered_columns`` holds ``Column`` objects with ``.label``.
+    lab = getattr(ck, "label", None)
+    if lab is not None:
+        return lab.plain if hasattr(lab, "plain") else str(lab)
     return dt.columns[ck].label.plain
 
 
@@ -1537,7 +1605,12 @@ def _datatable_source_clipboard_str(app, dt: DataTable) -> str | None:
         return None
 
     preview = getattr(app, "_preview", None)
-    if preview is not None and preview.has_class("browse-preview-table"):
+    # Browse HDF5 clipboard only for the sidebar snapshot table, not modals (e.g. summary).
+    if (
+        preview is not None
+        and preview.has_class("browse-preview-table")
+        and getattr(dt, "id", None) == "dtable"
+    ):
         name = app.get_selected_itemname()
         if not name:
             return None
@@ -2117,11 +2190,12 @@ def is_plotable(obj):
 
 
 def is_aggregatable(obj):
-    return (
-        isinstance(obj, np.ndarray)
-        and np.issubdtype(obj.dtype, np.number)
-        and obj.size > 1
-    )
+    """Plain numeric arrays, or 1D compound with at least one scalar numeric field."""
+    if not isinstance(obj, np.ndarray) or obj.size <= 1:
+        return False
+    if obj.dtype.fields is None:
+        return np.issubdtype(obj.dtype, np.number)
+    return obj.ndim == 1 and bool(dtype_numeric_field_names(obj.dtype))
 
 
 def is_histogram_eligible(obj) -> bool:
@@ -2510,12 +2584,14 @@ def is_plotable_lazy_dset(dset: h5py.Dataset) -> bool:
 
 
 def is_aggregatable_lazy_dset(dset: h5py.Dataset) -> bool:
-    return (
-        len(dset.dtype) == 0
-        and dset.dtype != np.dtype("O")
-        and np.issubdtype(dset.dtype, np.number)
-        and int(dset.size) > 1
-    )
+    """Large on-disk summary: plain numeric (any shape) or 1D compound with numeric fields."""
+    if int(dset.size) <= 1:
+        return False
+    if len(dset.dtype) == 0 and dset.dtype != np.dtype("O"):
+        return np.issubdtype(dset.dtype, np.number)
+    if dset.ndim == 1 and dset.dtype.fields is not None:
+        return bool(dtype_numeric_field_names(dset.dtype))
+    return False
 
 
 def aggregate_h5_numeric_chunks(dset: h5py.Dataset) -> dict[str, float]:
@@ -2567,6 +2643,48 @@ def aggregate_h5_numeric_chunks(dset: h5py.Dataset) -> dict[str, float]:
         "min": vmin,
         "L2 norm": l2,
     }
+
+
+def aggregate_h5_compound_numeric_chunks(
+    dset: h5py.Dataset,
+) -> dict[str, dict[str, float]]:
+    """Per-field mean/var/std/min/max/L2 for 1D compound datasets (chunked over rows)."""
+    if dset.ndim != 1 or dset.dtype.fields is None:
+        raise ValueError("compound aggregate requires a 1D compound dataset")
+    names = dtype_numeric_field_names(dset.dtype)
+    if not names:
+        raise ValueError("compound aggregate requires at least one numeric field")
+    n = int(dset.shape[0])
+    chunk = _AGG_CHUNK
+    out: dict[str, dict[str, float]] = {}
+    for fname in names:
+        col = dset[fname]
+        sum_x = 0.0
+        sum_x2 = 0.0
+        vmin = np.inf
+        vmax = -np.inf
+        for start in range(0, n, chunk):
+            end = min(start + chunk, n)
+            b = np.asarray(col[start:end], dtype=np.float64)
+            if b.size == 0:
+                continue
+            sum_x += float(b.sum())
+            sum_x2 += float(np.dot(b, b))
+            vmin = min(vmin, float(b.min()))
+            vmax = max(vmax, float(b.max()))
+        mean = sum_x / n
+        var = max(0.0, sum_x2 / n - mean * mean)
+        std = float(np.sqrt(var))
+        l2 = float(np.sqrt(sum_x2))
+        out[fname] = {
+            "mean": float(mean),
+            "var": float(var),
+            "std": std,
+            "max": vmax,
+            "min": vmin,
+            "L2 norm": l2,
+        }
+    return out
 
 
 def sample_dset_for_plot_1d(dset: h5py.Dataset) -> np.ndarray:
@@ -4157,17 +4275,19 @@ class H5TUIApp(App):
             return None
         return _dataset_path_element_count(self._file, path)
 
-    def _h5_path_is_plain_numeric_dataset(self, path: str) -> bool:
-        """Whether ``path`` is a non-record numeric dataset suitable for summary (no array read)."""
+    def _h5_path_is_aggregatable_dataset(self, path: str) -> bool:
+        """Whether ``path`` is suitable for summary: plain numeric or 1D compound (no array read)."""
         try:
             node = self._file[path]
         except Exception:
             return False
         if not isinstance(node, h5py.Dataset):
             return False
-        if node.dtype.fields is not None:
+        if int(node.size) <= 1:
             return False
-        return np.issubdtype(node.dtype, np.number) and node.size > 1
+        if node.dtype.fields is None:
+            return np.issubdtype(node.dtype, np.number)
+        return node.ndim == 1 and bool(dtype_numeric_field_names(node.dtype))
 
     def _summary_large_confirm_key(self) -> str | None:
         """HDF5 path identifying the dataset for summary double-confirm."""
@@ -4509,7 +4629,7 @@ class H5TUIApp(App):
                 return
         else:
             path = self.get_selected_dataset_path()
-            if path is None or not self._h5_path_is_plain_numeric_dataset(path):
+            if path is None or not self._h5_path_is_aggregatable_dataset(path):
                 self.notify(
                     "Select or open a numeric dataset to summarize",
                     severity="warning",
@@ -4527,15 +4647,20 @@ class H5TUIApp(App):
                 if not is_aggregatable_lazy_dset(dset):
                     return
                 try:
-                    st = aggregate_h5_numeric_chunks(dset)
+                    if dset.dtype.fields is not None:
+                        st = aggregate_h5_compound_numeric_chunks(dset)
+                        self.push_screen(
+                            DatasetSummaryScreen(streaming_stats_by_field=st)
+                        )
+                    else:
+                        st = aggregate_h5_numeric_chunks(dset)
+                        self.push_screen(DatasetSummaryScreen(streaming_stats=st))
                 except Exception as e:
                     self.notify(
                         f"Could not summarize dataset: {e}",
                         severity="error",
                         timeout=8,
                     )
-                    return
-                self.push_screen(DatasetSummaryScreen(streaming_stats=st))
                 return
             if self.has_class("view-plot") and not self.has_class("view-dataset"):
                 path = self.get_selected_dataset_path()
@@ -4550,15 +4675,20 @@ class H5TUIApp(App):
                 ):
                     return
                 try:
-                    st = aggregate_h5_numeric_chunks(dset)
+                    if dset.dtype.fields is not None:
+                        st = aggregate_h5_compound_numeric_chunks(dset)
+                        self.push_screen(
+                            DatasetSummaryScreen(streaming_stats_by_field=st)
+                        )
+                    else:
+                        st = aggregate_h5_numeric_chunks(dset)
+                        self.push_screen(DatasetSummaryScreen(streaming_stats=st))
                 except Exception as e:
                     self.notify(
                         f"Could not summarize dataset: {e}",
                         severity="error",
                         timeout=8,
                     )
-                    return
-                self.push_screen(DatasetSummaryScreen(streaming_stats=st))
                 return
             data = self._get_aggregate_data_context()
             if data is None or not is_aggregatable(data):
