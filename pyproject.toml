@@ -11,7 +11,6 @@ dependencies = [
   "textual_plotext",
   "h5py",
   "numpy",
-  "pandas",
   "matplotlib",
   "scipy",
 ]

@@ -31,7 +31,6 @@ from rich.text import Text
 
 import h5py
 import numpy as np
-import pandas as pd
 
 import sys
 import os
@@ -436,12 +435,28 @@ def _plot_preview_plain_1d(
     plot_plt.plot(xv, y, color="cyan", marker="braille")
 
 
+class _PlotextHeatmapDataFrame:
+    """Minimal pandas.DataFrame stand-in for plotext ``heatmap`` (``plotext._monitor.draw_heatmap``)."""
+
+    __slots__ = ("columns", "index", "values")
+
+    def __init__(self, data: np.ndarray) -> None:
+        data = np.asarray(data)
+        nrows, ncols = data.shape
+        self.columns = np.arange(ncols)
+        self.index = np.arange(nrows)
+        self.values = data
+
+    def __repr__(self) -> str:
+        return np.array2string(self.values, max_line_width=120)
+
+
 def _plot_preview_2d(plot_plt, data: np.ndarray) -> None:
     data = np.asarray(data)
     nrows, ncols = data.shape
     plot_plt.plot_size(nrows, ncols)
     if nrows < _PLOT_2D_HEATMAP_THRESHOLD and ncols < _PLOT_2D_HEATMAP_THRESHOLD:
-        plot_plt.heatmap(pd.DataFrame(data))
+        plot_plt.heatmap(_PlotextHeatmapDataFrame(data))
         plot_plt.title("")
     else:
         plot_plt.matrix_plot(data.tolist())
@@ -1218,7 +1233,7 @@ class GroupFindScreen(ModalScreen):
 
     def on_mount(self) -> None:
         dlg = self.query_one("#group-find-dialog", Vertical)
-        dlg.border_title = "Find next:"
+        dlg.border_title = "Find in group:"
         inp = self.query_one("#group_find_input", Input)
         inp.focus()
         self.app.apply_group_find_query("")
