@@ -279,6 +279,12 @@ SavePlotScreen #save_plot_scroll {
   display: none;
 }
 
+/* Browse compound histogram: field picker only (``histogram_settings_only``). */
+#save-plot-dialog.histogram-settings-only .compound-hist-opts {
+  padding: 0 1;
+  width: 100%;
+}
+
 #save_plot_title {
   margin: 0 0 1 0;
   text-style: bold;

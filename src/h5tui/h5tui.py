@@ -348,11 +348,19 @@ def _default_histogram_bins(data: np.ndarray) -> int:
     return min(40, max(10, int(np.sqrt(n))))
 
 
-def _plot_1d_histogram(plot_plt, data: np.ndarray, bins: int | None = None) -> None:
+def _plot_1d_histogram(
+    plot_plt,
+    data: np.ndarray,
+    bins: int | None = None,
+    *,
+    title: str | None = None,
+) -> None:
     """Draw a histogram of ``data`` (1D) using NumPy binning and Plotext ``bar``."""
     vals = np.asarray(data, dtype=np.float64).ravel()
     vals = vals[np.isfinite(vals)]
     if vals.size == 0:
+        if title:
+            plot_plt.title(title)
         plot_plt.xlabel("Value")
         plot_plt.ylabel("Count")
         return
@@ -361,6 +369,8 @@ def _plot_1d_histogram(plot_plt, data: np.ndarray, bins: int | None = None) -> N
     x = ((edges[:-1] + edges[1:]) / 2).tolist()
     y = counts.astype(float).tolist()
     plot_plt.bar(x, y, color="cyan")
+    if title:
+        plot_plt.title(title)
     plot_plt.xlabel("Value")
     plot_plt.ylabel("Count")
 
@@ -383,10 +393,20 @@ def _plot_preview_compound_1d(
     compound_y: str,
     log_x: bool,
     log_y: bool,
+    histogram_value_field: str | None = None,
 ) -> None:
     if histogram:
+        field = (
+            histogram_value_field
+            if histogram_value_field is not None
+            else str(compound_y)
+        )
         _plotext_reset_linear(plot_plt)
-        _plot_1d_histogram(plot_plt, np.asarray(data[compound_y], dtype=np.float64))
+        _plot_1d_histogram(
+            plot_plt,
+            np.asarray(data[field], dtype=np.float64),
+            title=str(field),
+        )
         return
     _plotext_compound_line(
         plot_plt,
@@ -407,9 +427,10 @@ def _plot_preview_plain_1d(
 ) -> None:
     y = np.asarray(y)
     if histogram:
-        _plot_1d_histogram(plot_plt, y)
+        _plot_1d_histogram(plot_plt, y, title="Values")
         return
     xv = np.arange(y.shape[0]) if x is None else np.asarray(x)
+    plot_plt.title("Value vs Index")
     plot_plt.xlabel("Index")
     plot_plt.plot(xv, y, color="cyan", marker="braille")
 
@@ -579,6 +600,7 @@ def _plotext_compound_line(
     plot_plt.xscale("log" if log_x else "linear")
     plot_plt.yscale("log" if log_y else "linear")
     xlab = "Index" if x_key == COMPOUND_PLOT_INDEX else str(x_key)
+    plot_plt.title(f"{y_key} vs {xlab}")
     plot_plt.xlabel(xlab)
     plot_plt.ylabel(str(y_key))
     if xv.size == 0:
@@ -687,13 +709,21 @@ class SavePlotScreen(ModalScreen):
         compound_log_x: bool = False,
         compound_log_y: bool = False,
         plot_settings_only: bool = False,
+        histogram_settings_only: bool = False,
         id=None,
     ) -> None:
         super().__init__(id=id)
         self._data = np.asarray(data)
         self._dset_name = dset_name
         self._is_compound = self._data.dtype.fields is not None and self._data.ndim == 1
-        self._plot_settings_only = bool(plot_settings_only) and self._is_compound
+        self._histogram_settings_only = (
+            bool(histogram_settings_only) and self._is_compound
+        )
+        self._plot_settings_only = (
+            bool(plot_settings_only)
+            and self._is_compound
+            and not self._histogram_settings_only
+        )
         self._numeric_names = (
             dtype_numeric_field_names(self._data.dtype) if self._is_compound else []
         )
@@ -762,6 +792,26 @@ class SavePlotScreen(ModalScreen):
             yield Select(h_opts, id="compound_hist_field", value=hf)
 
     def compose(self) -> ComposeResult:
+        if self._histogram_settings_only:
+            _, _, h_opts, _, _, hf = self._compound_select_params()
+            dlg_classes = "mode-histogram compound-dataset histogram-settings-only"
+            with Vertical(id="save-plot-dialog", classes=dlg_classes):
+                with VerticalScroll(id="save_plot_scroll"):
+                    with VerticalGroup():
+                        yield Static(
+                            f"Histogram · {self._dset_name}", id="save_plot_title"
+                        )
+                        with VerticalGroup(classes="compound-hist-opts"):
+                            yield Label("Histogram field")
+                            yield Select(h_opts, id="compound_hist_field", value=hf)
+                        yield Button(
+                            "Show histogram",
+                            variant="primary",
+                            id="confirm_hist_plot_btn",
+                        )
+            yield Footer()
+            return
+
         if self._plot_settings_only:
             dlg_classes = "mode-lineplot compound-dataset plot-settings-only"
             with Vertical(id="save-plot-dialog", classes=dlg_classes):
@@ -814,7 +864,9 @@ class SavePlotScreen(ModalScreen):
 
     def on_mount(self) -> None:
         self._set_mode_class()
-        if self._plot_settings_only:
+        if self._histogram_settings_only:
+            self.query_one("#compound_hist_field", Select).focus()
+        elif self._plot_settings_only:
             self.query_one("#compound_x", Select).focus()
         else:
             self.query_one("#save_filename", Input).focus()
@@ -831,6 +883,8 @@ class SavePlotScreen(ModalScreen):
         return "lineplot"
 
     def _mode(self) -> str:
+        if getattr(self, "_histogram_settings_only", False):
+            return "histogram"
         if getattr(self, "_plot_settings_only", False):
             return "lineplot"
         sel = self.query_one("#plot_save_mode", Select)
@@ -845,6 +899,8 @@ class SavePlotScreen(ModalScreen):
             parts.append("compound-dataset")
         if getattr(self, "_plot_settings_only", False):
             parts.append("plot-settings-only")
+        if getattr(self, "_histogram_settings_only", False):
+            parts.append("histogram-settings-only")
         dlg.set_classes(" ".join(parts))
 
     @on(Select.Changed, "#plot_save_mode")
@@ -855,7 +911,11 @@ class SavePlotScreen(ModalScreen):
         self._set_mode_class(mode)
 
     def action_close_save(self) -> None:
-        if getattr(self, "_plot_settings_only", False):
+        if getattr(self, "_histogram_settings_only", False):
+            fn = getattr(self.app, "_on_compound_histogram_browse_cancelled", None)
+            if callable(fn):
+                fn()
+        elif getattr(self, "_plot_settings_only", False):
             fn = getattr(self.app, "_on_compound_plot_settings_cancelled", None)
             if callable(fn):
                 fn()
@@ -869,6 +929,18 @@ class SavePlotScreen(ModalScreen):
         self._persist_compound_plot_settings()
         self.app.pop_screen()
         fn = getattr(self.app, "_on_compound_plot_settings_confirmed", None)
+        if callable(fn):
+            fn()
+
+    @on(Button.Pressed, "#confirm_hist_plot_btn")
+    def _on_confirm_hist_plot_pressed(self) -> None:
+        hf = self.query_one("#compound_hist_field", Select).value
+        if not hf:
+            self.app.notify("Select a histogram field", severity="warning", timeout=2)
+            return
+        self.app._compound_browse_histogram_field = str(hf)
+        self.app.pop_screen()
+        fn = getattr(self.app, "_on_compound_histogram_browse_confirmed", None)
         if callable(fn):
             fn()
 
@@ -2522,6 +2594,9 @@ class ColumnContent(VerticalScroll):
                 yk = getattr(app, "_compound_plot_y", "") or names[0]
                 if yk not in names:
                     yk = names[0]
+                hist_field: str | None = None
+                if bool(getattr(app, "_plot_histogram", False)):
+                    hist_field = app._compound_histogram_value_field_for_preview()
                 _plot_preview_compound_1d(
                     plt,
                     data,
@@ -2532,6 +2607,7 @@ class ColumnContent(VerticalScroll):
                     compound_y=str(yk),
                     log_x=bool(getattr(app, "_compound_plot_log_x", False)),
                     log_y=bool(getattr(app, "_compound_plot_log_y", False)),
+                    histogram_value_field=hist_field,
                 )
                 return
             _plotext_reset_linear(plt)
@@ -2563,6 +2639,9 @@ class ColumnContent(VerticalScroll):
             yk = getattr(app, "_compound_plot_y", "") or names[0]
             if yk not in names:
                 yk = names[0]
+            hist_field: str | None = None
+            if bool(getattr(app, "_plot_histogram", False)):
+                hist_field = app._compound_histogram_value_field_for_preview()
             _plot_preview_compound_1d(
                 plt,
                 data,
@@ -2571,6 +2650,7 @@ class ColumnContent(VerticalScroll):
                 compound_y=str(yk),
                 log_x=bool(getattr(app, "_compound_plot_log_x", False)),
                 log_y=bool(getattr(app, "_compound_plot_log_y", False)),
+                histogram_value_field=hist_field,
             )
             return
         if not is_plotable(data):
@@ -2640,6 +2720,9 @@ class H5TUIApp(App):
         self._compound_plot_log_y = False
         # Browse-mode compound plot: sample held until ``SavePlotScreen`` (plot_settings_only) confirms.
         self._pending_browse_compound_plot: tuple[np.ndarray, str] | None = None
+        # Browse-mode compound histogram: sample + chosen field after ``histogram_settings_only`` confirms.
+        self._pending_browse_histogram_sample: np.ndarray | None = None
+        self._compound_browse_histogram_field: str | None = None
         # HDF5 path for the dataset opened in full view (basename used for save-as default).
         self._open_dataset_path: str | None = None
         # Large-dataset double-confirm: same key as ``_large_op_arm`` + second press runs op.
@@ -2898,6 +2981,8 @@ class H5TUIApp(App):
         self._data = None
         self._open_dataset_path = None
         self._pending_browse_compound_plot = None
+        self._pending_browse_histogram_sample = None
+        self._compound_browse_histogram_field = None
         self._plot_histogram = False
         self._lazy_mode = False
         self._lazy_dset_path = None
@@ -2926,6 +3011,8 @@ class H5TUIApp(App):
             self._plot_histogram = False
             self._data = None
             self._pending_browse_compound_plot = None
+            self._pending_browse_histogram_sample = None
+            self._compound_browse_histogram_field = None
         self._preview.remove_class("empty-group-preview")
         self._preview.remove_class("browse-preview-table")
         name = self.get_selected_itemname()
@@ -3074,6 +3161,7 @@ class H5TUIApp(App):
         if pend is not None:
             self._data = pend[0]
         self._plot_histogram = False
+        self._compound_browse_histogram_field = None
         self._preview.remove_class("browse-preview-table")
         self.add_class("view-plot")
         self._preview.replot()
@@ -3085,6 +3173,40 @@ class H5TUIApp(App):
 
     def _on_compound_plot_settings_cancelled(self) -> None:
         self._pending_browse_compound_plot = None
+
+    def _on_compound_histogram_browse_confirmed(self) -> None:
+        """After ``Show histogram`` on browse compound modal: show histogram in preview."""
+        sample = self._pending_browse_histogram_sample
+        self._pending_browse_histogram_sample = None
+        if sample is not None:
+            self._data = sample
+        self._plot_histogram = True
+        opening = not self.has_class("view-plot")
+        if opening:
+            self.notify("Histogram…", timeout=1.5)
+        self._preview.remove_class("browse-preview-table")
+        self.add_class("view-plot")
+        self._preview.replot()
+        self._current_list.focus()
+        self.refresh_bindings()
+
+    def _on_compound_histogram_browse_cancelled(self) -> None:
+        self._pending_browse_histogram_sample = None
+        self._compound_browse_histogram_field = None
+
+    def _compound_histogram_value_field_for_preview(self) -> str | None:
+        """Histogram column: DataTable cursor (full view) or browse modal field."""
+        c = self._compound_histogram_field_from_cursor()
+        if c is not None:
+            return c
+        if (
+            self.has_class("view-plot")
+            and not self.has_class("view-dataset")
+            and bool(getattr(self, "_plot_histogram", False))
+        ):
+            bf = getattr(self, "_compound_browse_histogram_field", None)
+            return str(bf) if bf else None
+        return None
 
     def update_content(self, path):
         self._preview.remove_class("browse-preview-table")
@@ -3435,13 +3557,21 @@ class H5TUIApp(App):
         """Leave full dataset / table / plot view and return focus to the file columns."""
         if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
-        if self.has_class("view-plot") and not self.has_class("view-dataset"):
+        # Plot overlay (including full-screen plot with dataset still open): close plot only.
+        if self.has_class("view-plot"):
             self.remove_class("view-plot")
             self._plot_histogram = False
-            self._data = None
-            self._pending_browse_compound_plot = None
-            self.refresh_preview()
-            self._current_list.focus()
+            if not self.has_class("view-dataset"):
+                self._data = None
+                self._pending_browse_compound_plot = None
+                self._pending_browse_histogram_sample = None
+                self._compound_browse_histogram_field = None
+                self.refresh_preview()
+                self._current_list.focus()
+            elif self.has_class("view-dtable"):
+                self._preview._df.focus()
+            else:
+                self._preview.focus()
             self.refresh_bindings()
             return
         if self.has_class("view-dataset"):
@@ -3462,25 +3592,18 @@ class H5TUIApp(App):
         if isinstance(self.screen, _MODAL_SCREENS_CHILD):
             scr = self.screen
             if isinstance(scr, SavePlotScreen) and getattr(
+                scr, "_histogram_settings_only", False
+            ):
+                self._on_compound_histogram_browse_cancelled()
+            elif isinstance(scr, SavePlotScreen) and getattr(
                 scr, "_plot_settings_only", False
             ):
                 self._on_compound_plot_settings_cancelled()
             self.pop_screen()
             return
-        if self.has_class("view-plot"):
-            self.remove_class("view-plot")
-            self._plot_histogram = False
-            if not self.has_class("view-dataset"):
-                self._data = None
-                self.refresh_preview()
-                self._current_list.focus()
-            elif self.has_class("view-dtable"):
-                self._preview._df.focus()
-            else:
-                self._preview.focus()
-            self.refresh_bindings()
-            return
-        if self.has_class("view-dataset"):
+        # Same behavior as Escape (``exit_dataset_view``): close plot overlay first when both
+        # ``view-plot`` and ``view-dataset`` are active (e.g. full-screen plot).
+        if self.has_class("view-plot") or self.has_class("view-dataset"):
             self.action_exit_dataset_view()
             return
         self.exit()
@@ -3616,6 +3739,63 @@ class H5TUIApp(App):
             return has_compound_plot_fields(a.dtype)
         return is_histogram_eligible(self._data)
 
+    def _compound_histogram_field_from_cursor(self) -> str | None:
+        """Numeric field under the DataTable cursor (1D compound full view); else ``None``."""
+        if not self.has_class("view-dataset") or not self.has_class("view-dtable"):
+            return None
+        df = self._preview._df
+        if df.row_count == 0 or not df.columns:
+            return None
+        try:
+            c = int(df.cursor_column)
+        except (TypeError, ValueError, AttributeError):
+            return None
+        if c < 0:
+            return None
+
+        if getattr(self, "_lazy_mode", False) and getattr(
+            self, "_lazy_structured_1d", False
+        ):
+            lp = self._lazy_dset_path
+            if not lp:
+                return None
+            dset = self._file[lp]
+            names = dset.dtype.names
+            if not names:
+                return None
+            nf = len(names)
+            fv = min(LAZY_STRUCT_FIELD_WINDOW, nf)
+            mx_fs = max(0, nf - fv)
+            fs = max(
+                0,
+                min(int(getattr(self, "_lazy_struct_field_start", 0)), mx_fs),
+            )
+            nvis = len(df.columns)
+            if c >= nvis:
+                return None
+            gidx = fs + c
+            if gidx >= nf:
+                return None
+            fname = str(names[gidx])
+            if fname not in dtype_numeric_field_names(dset.dtype):
+                return None
+            return fname
+
+        if self._data is None:
+            return None
+        a = np.asarray(self._data)
+        if a.dtype.fields is None or a.ndim != 1:
+            return None
+        names = a.dtype.names
+        if not names:
+            return None
+        if c >= len(names) or c >= len(df.columns):
+            return None
+        fname = str(names[c])
+        if fname not in dtype_numeric_field_names(a.dtype):
+            return None
+        return fname
+
     def _cancel_large_confirm_timer(self) -> None:
         t = self._large_confirm_timer
         if t is not None:
@@ -3694,15 +3874,20 @@ class H5TUIApp(App):
                     )
                     return
                 self._reset_compound_plot_defaults_for_dtype(dset.dtype)
-                self._data = sampled
-                self._plot_histogram = True
-                if not self.has_class("view-plot"):
-                    self.notify("Histogram…", timeout=1.5)
-                self._preview.remove_class("browse-preview-table")
-                self.add_class("view-plot")
-                self._preview.replot()
-                self._current_list.focus()
-                self.refresh_bindings()
+                name = os.path.basename(path.rstrip("/")) or "plot"
+                self._pending_browse_histogram_sample = sampled
+                self._compound_browse_histogram_field = None
+                self.push_screen(
+                    SavePlotScreen(
+                        sampled,
+                        name,
+                        compound_x=self._compound_plot_x,
+                        compound_y=self._compound_plot_y,
+                        compound_log_x=self._compound_plot_log_x,
+                        compound_log_y=self._compound_plot_log_y,
+                        histogram_settings_only=True,
+                    )
+                )
                 return
             if not (
                 len(dset.dtype) == 0
@@ -4073,6 +4258,8 @@ class H5TUIApp(App):
             self._plot_histogram = False
             self._data = None
             self._pending_browse_compound_plot = None
+            self._pending_browse_histogram_sample = None
+            self._compound_browse_histogram_field = None
             self.refresh_preview()
             self._current_list.focus()
             self.refresh_bindings()
