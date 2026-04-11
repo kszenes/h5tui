@@ -1239,9 +1239,8 @@ class GroupFindScreen(ModalScreen):
             yield Input(placeholder="", id="group_find_input")
 
     def on_mount(self) -> None:
-        dlg = self.query_one("#group-find-dialog", Vertical)
-        dlg.border_title = "Find in group:"
         inp = self.query_one("#group_find_input", Input)
+        inp.border_title = "Find in group"
         inp.focus()
         self.app.apply_group_find_query("")
 
@@ -2765,8 +2764,10 @@ class H5TUIApp(App):
         Binding("left,h", "goto_parent", "Back", show=True),
         Binding("right,l", "goto_child", "Select", show=True),
         Binding("a", "view_attrs", "Attributes", show=True),
-        Binding("p", "toggle_plot", "Plot", show=True),
-        Binding("P", "toggle_plot_histogram", "Histogram", show=True),
+        Binding("v", "toggle_plot", "Plot", show=True),
+        Binding("V", "toggle_plot_histogram", "Histogram", show=True),
+        Binding("p", "find_prev_match", "Prev find", show=False),
+        Binding("n", "find_next_match", "Next find", show=False),
         Binding("s", "save_plot", "Save plot", show=True),
         Binding("A", "aggregate_data", "Summary", show=True),
         Binding(":", "jump_to_line", "Jump to line", show=False),
@@ -3021,6 +3022,13 @@ class H5TUIApp(App):
 
     def refresh_current_column(self, prev_highlighted: int = 0) -> None:
         self._current_list.border_title = "Current"
+        if self._group_find_query and not self._browse_find_open:
+            self._refresh_current_group_find_list(
+                self._group_find_query,
+                jump_to_first_match=False,
+                preferred_highlight=prev_highlighted,
+            )
+            return
         opts = self.add_dir_metadata()
         self._current_list.clear_options()
         self._current_list.add_options(opts)
@@ -3030,8 +3038,35 @@ class H5TUIApp(App):
         else:
             self._current_list.highlighted = min(prev_highlighted, n - 1)
 
-    def _refresh_current_group_find_list(self, query: str) -> None:
-        """Rebuild Current column with Rich Text (styled runs); jump to first match."""
+    def _clear_group_find_sticky(self) -> None:
+        """Drop substring highlights from the last `/` search (browse mode)."""
+        if not self._group_find_query or self._browse_find_open:
+            return
+        self._group_find_query = ""
+        hi = self._current_list.highlighted
+        self.refresh_current_column(hi if hi is not None else 0)
+
+    def _group_find_match_indices(self) -> list[int]:
+        """Row indices in the Current list whose basename matches the sticky find query."""
+        if not self._group_find_query or self._browse_find_open:
+            return []
+        q = self._group_find_query.casefold()
+        items = self.get_dir_content(self._cur_dir)
+        return [i for i, name in enumerate(items) if q in name.casefold()]
+
+    def _refresh_current_group_find_list(
+        self,
+        query: str,
+        *,
+        jump_to_first_match: bool = True,
+        preferred_highlight: int | None = None,
+    ) -> None:
+        """Rebuild Current column with Rich Text (styled runs).
+
+        While the find modal is open, ``jump_to_first_match`` selects the first
+        matching name on each query change. After submit, sticky mode keeps the
+        query and uses ``preferred_highlight`` without jumping to the first match.
+        """
         grp = self._file[self._cur_dir]
         if not isinstance(grp, h5py.Group):
             self._current_list.clear_options()
@@ -3059,17 +3094,33 @@ class H5TUIApp(App):
                 (i for i, name in enumerate(items) if q_fold in name.casefold()),
                 None,
             )
-            if first is not None:
-                self._current_list.highlighted = first
-            elif n:
-                # No matches: keep the row that was selected before this refresh.
-                if prev_highlight is not None and 0 <= prev_highlight < n:
-                    self._current_list.highlighted = prev_highlight
+            if jump_to_first_match:
+                if first is not None:
+                    self._current_list.highlighted = first
+                elif n:
+                    # No matches: keep the row that was selected before this refresh.
+                    if prev_highlight is not None and 0 <= prev_highlight < n:
+                        self._current_list.highlighted = prev_highlight
+                    else:
+                        saved = max(0, self._browse_find_saved_highlight)
+                        self._current_list.highlighted = min(saved, n - 1)
                 else:
+                    self._current_list.highlighted = None
+            else:
+                want = (
+                    preferred_highlight
+                    if preferred_highlight is not None
+                    else prev_highlight
+                )
+                if want is not None and 0 <= want < n:
+                    self._current_list.highlighted = want
+                elif first is not None:
+                    self._current_list.highlighted = first
+                elif n:
                     saved = max(0, self._browse_find_saved_highlight)
                     self._current_list.highlighted = min(saved, n - 1)
-            else:
-                self._current_list.highlighted = None
+                else:
+                    self._current_list.highlighted = None
         elif n:
             saved = max(0, self._browse_find_saved_highlight)
             self._current_list.highlighted = min(saved, n - 1)
@@ -3082,22 +3133,61 @@ class H5TUIApp(App):
         if not self._browse_find_open:
             return
         self._group_find_query = query
-        self._refresh_current_group_find_list(query)
+        self._refresh_current_group_find_list(query, jump_to_first_match=True)
 
     def finish_group_find(self, *, cancelled: bool) -> None:
         self._browse_find_open = False
-        self._group_find_query = ""
         if cancelled:
+            self._group_find_query = ""
             prev = max(0, self._browse_find_saved_highlight)
             self.refresh_current_column(prev)
         else:
             hi = self._current_list.highlighted
             if hi is None:
                 hi = max(0, self._browse_find_saved_highlight)
+            # Sticky yellow highlights (and n/p) only when multiple names match.
+            if len(self._group_find_match_indices()) <= 1:
+                self._group_find_query = ""
             self.refresh_current_column(hi)
         self.update_header(self._header_content(self._cur_dir))
         if not self.has_class("view-dataset"):
             self._current_list.focus()
+
+    def action_find_next_match(self) -> None:
+        """Jump to the next row whose name matches the sticky ``/`` query (wraps)."""
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
+            return
+        if self.has_class("view-dataset"):
+            return
+        matches = self._group_find_match_indices()
+        if not matches:
+            return
+        cur = self._current_list.highlighted
+        if cur is None:
+            self._current_list.highlighted = matches[0]
+        else:
+            nxt = next((m for m in matches if m > cur), None)
+            self._current_list.highlighted = nxt if nxt is not None else matches[0]
+        if not self.has_class("view-dataset"):
+            self.refresh_preview()
+
+    def action_find_prev_match(self) -> None:
+        """Jump to the previous matching row for the sticky ``/`` query (wraps)."""
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
+            return
+        if self.has_class("view-dataset"):
+            return
+        matches = self._group_find_match_indices()
+        if not matches:
+            return
+        cur = self._current_list.highlighted
+        if cur is None:
+            self._current_list.highlighted = matches[-1]
+        else:
+            prv = next((m for m in reversed(matches) if m < cur), None)
+            self._current_list.highlighted = prv if prv is not None else matches[-1]
+        if not self.has_class("view-dataset"):
+            self.refresh_preview()
 
     def action_group_find(self) -> None:
         if isinstance(self.screen, _MODAL_SCREENS_ALL):
@@ -3283,6 +3373,7 @@ class H5TUIApp(App):
             new_dir = h5_child_path(pdir, keys[idx])
             if new_dir == self._cur_dir:
                 return
+            self._clear_group_find_sticky()
             self._cur_dir = new_dir
             self._browse_highlight_stack.clear()
             self._clear_detail_view_state()
@@ -3411,6 +3502,7 @@ class H5TUIApp(App):
         return None
 
     def update_content(self, path):
+        self._clear_group_find_sticky()
         self._preview.remove_class("browse-preview-table")
         self._preview.remove_class("empty-group-preview")
         self.remove_class("view-plot")
@@ -3707,6 +3799,7 @@ class H5TUIApp(App):
 
     def action_scroll_preview_down(self) -> None:
         """Nudge preview when file lists are focused (``J`` does not steal table jump)."""
+        self._clear_group_find_sticky()
         if (
             self.has_class("view-dtable")
             and self.has_class("view-dataset")
@@ -3717,6 +3810,7 @@ class H5TUIApp(App):
             self._preview.scroll_down()
 
     def action_scroll_preview_up(self) -> None:
+        self._clear_group_find_sticky()
         if (
             self.has_class("view-dtable")
             and self.has_class("view-dataset")
@@ -3750,6 +3844,10 @@ class H5TUIApp(App):
         ):
             # Let MyDataTable handle h / l for column moves instead of app navigation.
             return False
+        elif action in ("find_next_match", "find_prev_match") and isinstance(
+            self.screen, _MODAL_SCREENS_ALL
+        ):
+            return False
         elif action == "view_attrs" and not self.has_attr():
             return None
         else:
@@ -3761,6 +3859,7 @@ class H5TUIApp(App):
             return
         # Plot overlay (including full-screen plot with dataset still open): close plot only.
         if self.has_class("view-plot"):
+            self._clear_group_find_sticky()
             self.remove_class("view-plot")
             self._plot_histogram = False
             if not self.has_class("view-dataset"):
@@ -3784,6 +3883,10 @@ class H5TUIApp(App):
             self.update_header(self._header_content(self._cur_dir))
             self.refresh_preview()
             self.refresh_bindings()
+            return
+        # Pure browse (no dataset / plot overlay): Esc clears sticky ``/`` highlights.
+        if self._group_find_query and not self._browse_find_open:
+            self._clear_group_find_sticky()
 
     def action_quit_application(self) -> None:
         """Always exit the app (bound to ``Q``)."""
@@ -3812,6 +3915,7 @@ class H5TUIApp(App):
 
     def action_view_attrs(self) -> None:
         """Open a modal listing attributes for the selected group or dataset."""
+        self._clear_group_find_sticky()
         selected_item = self.get_selected_itemname()
         if selected_item is not None:
             if self.build_attr_str(self._cur_dir, selected_item) != "":
@@ -4165,6 +4269,7 @@ class H5TUIApp(App):
         """Open save dialog for 1D numeric or compound data (``s``)."""
         if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
+        self._clear_group_find_sticky()
         data, name = self._get_1d_save_plot_context()
         if data is None or name is None:
             self.notify(
@@ -4191,6 +4296,7 @@ class H5TUIApp(App):
         """Open dataset summary modal (``A``): numeric stats in a card grid."""
         if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
+        self._clear_group_find_sticky()
         n = self._preview_aggregate_element_count()
         if n is None:
             self.notify(
@@ -4309,6 +4415,7 @@ class H5TUIApp(App):
 
     def action_toggle_dark(self) -> None:
         """Switch between Nord (dark) and Catppuccin Latte (light)."""
+        self._clear_group_find_sticky()
         self.theme = "nord" if self.theme == "catppuccin-latte" else "catppuccin-latte"
 
     def action_goto_parent(self) -> None:
@@ -4318,6 +4425,7 @@ class H5TUIApp(App):
             # At file root there is no parent group; do not navigate or clear views
             # (including browse-mode plot in the preview, which uses view-plot without view-dataset).
             return
+        self._clear_group_find_sticky()
         if not self.has_class("view-dataset"):
             self._cur_dir = os.path.dirname(self._cur_dir)
             self.update_header(self._header_content(self._cur_dir))
@@ -4336,6 +4444,7 @@ class H5TUIApp(App):
 
     def action_goto_child(self) -> None:
         """Open a group/dataset, or toggle full-width preview when a dataset is open."""
+        self._clear_group_find_sticky()
         if self.has_class("view-dataset"):
             # Do not toggle layout while the plot is visible: ``l`` / right would otherwise
             # feel like a random "revert" (columns reappear, focus jumps to the file list).
@@ -4385,6 +4494,7 @@ class H5TUIApp(App):
         self.refresh_bindings()
 
     def action_toggle_plot(self):
+        self._clear_group_find_sticky()
         if self.has_class("view-dataset"):
             if not self._view_dataset_plotable():
                 self.notify(
@@ -4479,6 +4589,7 @@ class H5TUIApp(App):
 
     def action_toggle_plot_histogram(self) -> None:
         """Show a value histogram for 1D numeric data (``P``)."""
+        self._clear_group_find_sticky()
         if self.has_class("view-dataset"):
             if not self._view_dataset_histogram_eligible():
                 self.notify(

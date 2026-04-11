@@ -180,23 +180,29 @@ GroupFindScreen #group-find-dialog {
   max-width: 52%;
   min-width: 30;
   height: auto;
-  border: tall $accent 50%;
-  border-title-align: center;
-  border-title-style: bold;
-  border-title-color: $foreground 78%;
-  background: $surface;
-  padding: 0 1;
+  border: none;
+  background: transparent;
+  padding: 0;
   margin: 0 1 1 0;
   layout: vertical;
 }
 
 GroupFindScreen #group_find_input {
   width: 100%;
-  height: 1;
-  min-height: 1;
+  height: 3;
+  min-height: 3;
+  margin: 0;
+  border: tall $foreground 12%;
   background: $panel;
-  color: $text;
-  border: none;
+  border-title-align: left;
+  border-title-style: bold;
+  border-title-color: $foreground 82%;
+}
+
+GroupFindScreen #group_find_input:focus {
+  border: tall $foreground 45%;
+  background-tint: $foreground 6%;
+  border-title-color: $foreground;
 }
 
 AttributeScreen MyOptionList {
