@@ -1344,9 +1344,8 @@ def is_plain_1d_array(arr: np.ndarray) -> bool:
 MAX_TABLE_ELEMENTS = 200_000
 MAX_TABLE_COLUMNS = 1024
 
-# Double-confirm before full-array ops: max element count without a second keypress.
-# Tuned by cost: terminal line/2D plot is heaviest; 1D histogram bins are lighter;
-# summary is NumPy-only (no plotext) and tolerates much larger n.
+# Thresholds for "large dataset" UX: plot/histogram show a toast (sampled terminal view);
+# summary still uses double-confirm above _LARGE_AGGREGATE_ELEMENT_THRESHOLD.
 _LARGE_PLOT_ELEMENT_THRESHOLD = 500_000
 _LARGE_HISTOGRAM_ELEMENT_THRESHOLD = 3_000_000
 _LARGE_AGGREGATE_ELEMENT_THRESHOLD = 10_000_000
@@ -2801,7 +2800,8 @@ class H5TUIApp(App):
             d = self._data
             return None if d is None else np.asarray(d)
         if self.has_class("view-plot") and self._data is not None:
-            return np.asarray(self._data)
+            # Browse-mode plot stores downsampled samples in ``_data`` only for drawing.
+            return None
         path = self.get_selected_dataset_path()
         if path is None:
             return None
@@ -2817,8 +2817,6 @@ class H5TUIApp(App):
                 return int(self._file[self._lazy_dset_path].size)
             d = self._data
             return None if d is None else int(np.asarray(d).size)
-        if self.has_class("view-plot") and self._data is not None:
-            return int(np.asarray(self._data).size)
         path = self.get_selected_dataset_path()
         if path is None:
             return None
@@ -2905,22 +2903,36 @@ class H5TUIApp(App):
         )
 
     def _start_plot_preview_from_path(self, path: str, *, histogram: bool) -> None:
-        """Load dataset from ``path`` and show plot pane (browse mode)."""
+        """Show plot pane in browse mode using the same downsampling as lazy dataset view."""
         try:
-            dset_data = np.asarray(self._file[path][...])
+            node = self._file[path]
         except Exception as e:
             self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
             return
+        if not isinstance(node, h5py.Dataset):
+            self.notify(f"Not a dataset: {path}", severity="error", timeout=8)
+            return
+        dset = node
+
         if histogram:
-            self._data = dset_data
-            if not is_histogram_eligible(self._data):
-                self._data = None
+            if not (
+                dset.ndim == 1
+                and len(dset.dtype) == 0
+                and dset.dtype != np.dtype("O")
+                and np.issubdtype(dset.dtype, np.number)
+            ):
                 self.notify(
                     "Histogram is only available for 1D numeric datasets",
                     severity="warning",
                     timeout=2,
                 )
                 return
+            try:
+                sampled = sample_dset_for_plot_1d(dset)
+            except Exception as e:
+                self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+                return
+            self._data = sampled
             self._plot_histogram = True
             if not self.has_class("view-plot"):
                 self.notify("Histogram…", timeout=1.5)
@@ -2931,15 +2943,26 @@ class H5TUIApp(App):
             self._current_list.focus()
             self.refresh_bindings()
             return
-        if not is_plotable(dset_data):
+
+        if not is_plotable_lazy_dset(dset):
             self.notify(
                 "Only 1D and 2D numeric data can be plotted",
                 severity="warning",
                 timeout=2,
             )
             return
+
+        try:
+            if dset.ndim == 1:
+                sampled = sample_dset_for_plot_1d(dset)
+            else:
+                sampled = sample_dset_for_plot_2d(dset)
+        except Exception as e:
+            self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
+            return
+
         self._plot_histogram = False
-        self._data = dset_data
+        self._data = sampled
         self.notify("Plotting...", timeout=2)
         self._preview.remove_class("browse-preview-table")
         self.add_class("view-plot")
@@ -3008,8 +3031,24 @@ class H5TUIApp(App):
                     )
                     return
         elif self.has_class("view-plot") and self._data is not None:
-            data = self._get_aggregate_data_context()
-            if data is None or not is_aggregatable(data):
+            path = self.get_selected_dataset_path()
+            if path is None:
+                self.notify(
+                    "Select or open a numeric dataset to summarize",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+            try:
+                cand = self._file[path]
+            except Exception:
+                self.notify(
+                    "Select or open a numeric dataset to summarize",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+            if not (isinstance(cand, h5py.Dataset) and is_aggregatable_lazy_dset(cand)):
                 self.notify(
                     "Select or open a numeric dataset to summarize",
                     severity="warning",
@@ -3034,6 +3073,29 @@ class H5TUIApp(App):
             if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
                 dset = self._file[self._lazy_dset_path]
                 if not is_aggregatable_lazy_dset(dset):
+                    return
+                try:
+                    st = aggregate_h5_numeric_chunks(dset)
+                except Exception as e:
+                    self.notify(
+                        f"Could not summarize dataset: {e}",
+                        severity="error",
+                        timeout=8,
+                    )
+                    return
+                self.push_screen(DatasetSummaryScreen(streaming_stats=st))
+                return
+            if self.has_class("view-plot") and not self.has_class("view-dataset"):
+                path = self.get_selected_dataset_path()
+                if path is None:
+                    return
+                try:
+                    dset = self._file[path]
+                except Exception:
+                    return
+                if not (
+                    isinstance(dset, h5py.Dataset) and is_aggregatable_lazy_dset(dset)
+                ):
                     return
                 try:
                     st = aggregate_h5_numeric_chunks(dset)
@@ -3146,21 +3208,19 @@ class H5TUIApp(App):
             if opening:
                 n = self._view_dataset_element_count()
 
-                def do_open():
-                    self._plot_histogram = False
-                    self.notify("Plotting...", timeout=2)
-                    self.toggle_class("view-plot")
-                    self._preview.replot()
-
                 vk = self._open_dataset_path
                 if vk is None:
                     return
-                self._with_large_dataset_confirm(
-                    ("plot", "view", vk),
-                    n,
-                    _LARGE_PLOT_ELEMENT_THRESHOLD,
-                    do_open,
-                )
+                if int(n) > _LARGE_PLOT_ELEMENT_THRESHOLD:
+                    self.notify(
+                        "Large dataset: points sampled for plot",
+                        severity="warning",
+                        timeout=4,
+                    )
+                self._plot_histogram = False
+                self.notify("Plotting...", timeout=2)
+                self.toggle_class("view-plot")
+                self._preview.replot()
             else:
                 self._plot_histogram = False
                 self.toggle_class("view-plot")
@@ -3191,17 +3251,7 @@ class H5TUIApp(App):
                 timeout=2,
             )
             return
-        n = _dataset_path_element_count(self._file, path)
-        if n is None:
-            self._start_plot_preview_from_path(path, histogram=False)
-            return
-
-        self._with_large_dataset_confirm(
-            ("plot", "browse", path),
-            n,
-            _LARGE_PLOT_ELEMENT_THRESHOLD,
-            lambda: self._start_plot_preview_from_path(path, histogram=False),
-        )
+        self._start_plot_preview_from_path(path, histogram=False)
 
     def action_toggle_plot_histogram(self) -> None:
         """Show a value histogram for 1D numeric data (``P``)."""
@@ -3220,22 +3270,20 @@ class H5TUIApp(App):
                 return
             n = self._view_dataset_element_count()
 
-            def do_hist():
-                self._plot_histogram = True
-                self.notify("Histogram…", timeout=1.5)
-                self.add_class("view-plot")
-                self._preview.replot()
-                self._preview.focus()
-
             vk = self._open_dataset_path
             if vk is None:
                 return
-            self._with_large_dataset_confirm(
-                ("hist", "view", vk),
-                n,
-                _LARGE_HISTOGRAM_ELEMENT_THRESHOLD,
-                do_hist,
-            )
+            if int(n) > _LARGE_HISTOGRAM_ELEMENT_THRESHOLD:
+                self.notify(
+                    "Large dataset: points sampled for plot",
+                    severity="warning",
+                    timeout=4,
+                )
+            self._plot_histogram = True
+            self.notify("Histogram…", timeout=1.5)
+            self.add_class("view-plot")
+            self._preview.replot()
+            self._preview.focus()
             return
 
         path = self.get_selected_dataset_path()
@@ -3246,17 +3294,7 @@ class H5TUIApp(App):
                 timeout=2,
             )
             return
-        n = _dataset_path_element_count(self._file, path)
-        if n is None:
-            self._start_plot_preview_from_path(path, histogram=True)
-            return
-
-        self._with_large_dataset_confirm(
-            ("hist", "browse", path),
-            n,
-            _LARGE_HISTOGRAM_ELEMENT_THRESHOLD,
-            lambda: self._start_plot_preview_from_path(path, histogram=True),
-        )
+        self._start_plot_preview_from_path(path, histogram=True)
 
 
 def check_file_validity(fname):
