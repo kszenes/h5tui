@@ -71,7 +71,7 @@ At startup you see the HDF5 root. **Up/down** (`k` / `j` or arrow keys) move ins
 | `q` | Close modal / contextual quit |
 | `Q` | Quit application |
 
-![search_demo](https://github.com/user-attachments/assets/3c501334-e09c-4f9c-9f3c-d418061446c5)
+![search_demo](https://github.com/user-attachments/assets/5d399e43-c7f6-48a4-8750-816b2195add7)
 
 ---
 
