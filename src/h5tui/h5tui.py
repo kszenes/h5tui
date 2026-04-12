@@ -3342,6 +3342,7 @@ class H5TUIApp(App):
         Binding("escape", "exit_dataset_view", "Close", show=False),
         Binding("left,h", "goto_parent", "Back", show=False),
         Binding("right,l", "goto_child", "Enter", show=False),
+        Binding("~", "goto_root", "Root", show=False),
         Binding("a", "view_attrs", "Attributes", show=True),
         Binding("v", "toggle_plot", "Plot", show=True),
         Binding("V", "toggle_plot_histogram", "Hist", show=True),
@@ -4568,6 +4569,13 @@ class H5TUIApp(App):
             self.screen, _MODAL_SCREENS_ALL
         ):
             return False
+        elif action == "goto_root" and (
+            isinstance(self.screen, _MODAL_SCREENS_ALL)
+            or self.has_class("view-dataset")
+            or self.has_class("view-plot")
+        ):
+            # Browse-only: not in modals, full dataset view, or plot overlay.
+            return False
         elif action == "view_attrs" and not self.has_attr():
             return None
         else:
@@ -5265,6 +5273,19 @@ class H5TUIApp(App):
         """Switch between Nord (dark) and Catppuccin Latte (light)."""
         self._clear_group_find_sticky()
         self.theme = "nord" if self.theme == "catppuccin-latte" else "catppuccin-latte"
+
+    def action_goto_root(self) -> None:
+        """Jump browse UI to the HDF5 file root (``/``)."""
+        self._clear_group_find_sticky()
+        self._clear_detail_view_state()
+        self._browse_highlight_stack = []
+        self._cur_dir = "/"
+        self.update_header(self._header_content(self._cur_dir))
+        self.refresh_current_column(0)
+        self.refresh_parent_column()
+        self.refresh_preview()
+        self._current_list.focus()
+        self.refresh_bindings()
 
     def action_goto_parent(self) -> None:
         """Either displays parent or hides dataset"""
