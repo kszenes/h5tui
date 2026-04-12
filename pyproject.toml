@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "h5tui"
+version = "1.0.1"
 requires-python = ">=3.8.1"
-dynamic = ["version"]
 dependencies = [
   "textual",
   "textual_plotext",
@@ -52,14 +52,13 @@ Homepage = "https://github.com/kszenes/h5tui"
 Documentation = "https://github.com/kszenes/h5tui#readme"
 Repository = "https://github.com/kszenes/h5tui"
 Issues = "https://github.com/kszenes/h5tui/issues"
+Changelog = "https://github.com/kszenes/h5tui/blob/master/CHANGELOG.md"
 
 [project.scripts]
 h5tui = "h5tui.h5tui:h5tui"
 
 [tool.setuptools]
 include-package-data = true
-[tool.setuptools.dynamic]
-version = {attr = "h5tui.__version__"}
 
 [project.optional-dependencies]
 dev = [
