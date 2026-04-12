@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=54", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -16,24 +16,45 @@ dependencies = [
   "rapidfuzz",
 ]
 authors = [
-  {name = "Kalman Szenes", email =  "szenes.kalman@gmail.com"}
+  {name = "Kalman Szenes", email = "szenes.kalman@gmail.com"},
 ]
-description = "TUI application for navigating and viewing HDF5 files"
+description = "Vim-style terminal UI for browsing, plotting, and inspecting HDF5 files"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+  "hdf5",
+  "h5py",
+  "tui",
+  "terminal",
+  "textual",
+  "scientific",
+  "visualization",
+]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent"
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Visualization",
 ]
 
 [project.urls]
+Homepage = "https://github.com/kszenes/h5tui"
+Documentation = "https://github.com/kszenes/h5tui#readme"
 Repository = "https://github.com/kszenes/h5tui"
+Issues = "https://github.com/kszenes/h5tui/issues"
 
 [project.scripts]
 h5tui = "h5tui.h5tui:h5tui"
-
-[tools.dist.bdist_wheel]
-universal = true
 
 [tool.setuptools]
 include-package-data = true
