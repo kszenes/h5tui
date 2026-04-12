@@ -80,6 +80,8 @@ Additional keybindings:
 
 For **compound** datatypes, any field can be chosen as the x and y axis.
 
+> Note for large datasets, only an evenly sampled subset of the datapoints is plotted.
+
 #### Export as PDF
 
 Press `s` to open dialog to **Save Plot As PDF** via [matplotlib](https://github.com/matplotlib/matplotlib).
