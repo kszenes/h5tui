@@ -14,7 +14,8 @@
 OptionList#dirs-parent,
 OptionList#dirs-current {
   width: 1fr;
-  min-width: 18;
+  /* Allow shrinking so all three columns stay visible when the terminal is narrow. */
+  min-width: 0;
   height: 1fr;
   border: none;
   border-right: solid $foreground 12%;
@@ -43,7 +44,7 @@ MyOptionList {
 
 #content {
   width: 2fr;
-  min-width: 28;
+  min-width: 0;
   height: 1fr;
   border: none;
   background: $boost;
