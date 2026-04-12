@@ -11,7 +11,7 @@ This project wouldn't have been possible without [h5py](https://github.com/h5py/
 
 ## Demo
 
-![demo_plots](https://github.com/user-attachments/assets/b01c21d8-9d8b-426d-81ff-759ceb14644d)
+![demo_plots](https://github.com/user-attachments/assets/2a93b96c-8192-4867-b2de-6dbfe230e518)
 
 ## Installation
 
@@ -41,7 +41,7 @@ Inside the file tree, Groups are denoted by 📁 while Datasets are denoted by �
 
 Items with associated attributes are marked with the symbol ▼ followed by the number of attributes. They can be viewed using the `a` character, which will open a popup with the attributes for that item. The navigation in this menu is analogous to the general menu. The menu can be exited using the `q` or `left,h` keys.
 
-![demo_attrs](https://github.com/user-attachments/assets/14b7e60d-0963-4d5a-9329-82360a7eb214)
+![demo_attrs](https://github.com/user-attachments/assets/8d992aa4-9a59-475b-b2e9-de40294729ef)
 
 ## Plotting
 
