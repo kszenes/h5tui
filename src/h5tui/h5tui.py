@@ -284,10 +284,8 @@ class AttributeScreen(ModalScreen):
             priority=True,
         ),
         Binding("Q", "quit_application", "Quit app", show=True, priority=True),
-        Binding("j", "cursor_down", "Down", show=True, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-        Binding("k", "cursor_up", "Up", show=True, priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
+        Binding("j,down", "cursor_down", "Down", show=False, priority=False),
+        Binding("k,up", "cursor_up", "Up", show=False, priority=False),
         Binding("J", "scroll_content_down", "Scroll Down", priority=True),
         Binding("K", "scroll_content_up", "Scroll Up", priority=True),
         Binding("u", "scroll_content_page_up", "Page Up", priority=True),
@@ -1522,10 +1520,8 @@ class GlobalFuzzyFindScreen(ModalScreen):
             priority=True,
         ),
         Binding("Q", "quit_application", "Quit app", show=False, priority=True),
-        Binding("j", "cursor_down", "Down", show=True, priority=True),
-        Binding("down", "cursor_down", "Down", show=False, priority=True),
-        Binding("k", "cursor_up", "Up", show=True, priority=True),
-        Binding("up", "cursor_up", "Up", show=False, priority=True),
+        Binding("j,down", "cursor_down", "Down", show=False, priority=False),
+        Binding("k,up", "cursor_up", "Up", show=False, priority=False),
         Binding("tab", "cycle_focus", "Focus", show=False, priority=True),
     ]
 
@@ -3054,10 +3050,8 @@ def _text_item_highlight_ci(item: str, query: str) -> Text:
 
 class MyOptionList(OptionList):
     BINDINGS = [
-        Binding("j", "cursor_down", "Down", show=True),
-        Binding("down", "cursor_down", "Down", show=False),
-        Binding("k", "cursor_up", "Up", show=True),
-        Binding("up", "cursor_up", "Up", show=False),
+        Binding("j,down", "cursor_down", "Down", show=False),
+        Binding("k,up", "cursor_up", "Up", show=False),
         Binding("G", "page_down", "Bottom", show=False),
         Binding("g", "page_up", "Top", show=False),
         Binding("ctrl+u,u", "half_page_up", "Half page up", show=False),
@@ -3149,14 +3143,12 @@ class ColumnContent(VerticalScroll):
         return super().allow_vertical_scroll
 
     BINDINGS = [
-        Binding("j", "scroll_down", "Down", show=True),
-        Binding("down", "scroll_down", "Down", show=False),
-        Binding("k", "scroll_up", "Up", show=True),
-        Binding("up", "scroll_up", "Up", show=False),
+        Binding("j,down", "scroll_down", "Down", show=False),
+        Binding("k,up", "scroll_up", "Up", show=False),
         # Do not bind J/K here: they would scroll this VerticalScroll (the preview shell)
         # instead of the focused DataTable's ±10 row jump. Use j/k, or app J/K when the file list is focused.
-        Binding("pageup,u", "page_up", "Page up", show=False),
-        Binding("pagedown,d", "page_down", "Page down", show=False),
+        Binding("u,pageup", "page_up", "Page up", show=False),
+        Binding("d,pagedown", "page_down", "Page down", show=False),
         Binding("G", "scroll_end", "Bottom", show=False),
         Binding("g", "scroll_home", "Top", show=False),
     ]
@@ -3344,12 +3336,12 @@ class H5TUIApp(App):
 
     BINDINGS = [
         Binding("i", "toggle_dark", "Toggle dark mode", show=False),
-        # ``escape`` Close hint toggled at runtime via ``_sync_close_footer_bindings`` (dataset view).
+        # ``escape`` / ``:`` footer hints toggled at runtime via ``_sync_dataset_view_footer_bindings``.
         Binding("q", "quit_contextual", "Close", show=False),
         Binding("Q", "quit_application", "Quit", show=False),
         Binding("escape", "exit_dataset_view", "Close", show=False),
-        Binding("left,h", "goto_parent", "Back", show=True),
-        Binding("right,l", "goto_child", "Enter", show=True),
+        Binding("left,h", "goto_parent", "Back", show=False),
+        Binding("right,l", "goto_child", "Enter", show=False),
         Binding("a", "view_attrs", "Attributes", show=True),
         Binding("v", "toggle_plot", "Plot", show=True),
         Binding("V", "toggle_plot_histogram", "Hist", show=True),
@@ -3886,17 +3878,22 @@ class H5TUIApp(App):
             lines.append(f"(could not read data: {e})")
         return "\n".join(lines)
 
-    def _sync_close_footer_bindings(self) -> None:
-        """Show ``escape`` as ``Close`` in the footer only while ``view-dataset`` is active."""
-        show_close = self.has_class("view-dataset")
-        key, action = "escape", "exit_dataset_view"
-        lst = self._bindings.key_to_bindings.get(key)
-        if lst:
+    def _sync_dataset_view_footer_bindings(self) -> None:
+        """Show dataset-only footer hints (Close, Jump to row) only while ``view-dataset`` is active."""
+        show = self.has_class("view-dataset")
+        for key, action, desc in (
+            ("escape", "exit_dataset_view", "Close"),
+            # Single ``:`` is normalized to the key name ``colon`` in Textual's binding map.
+            ("colon", "jump_to_line", "Jump to row"),
+        ):
+            lst = self._bindings.key_to_bindings.get(key)
+            if not lst:
+                continue
             self._bindings.key_to_bindings[key] = [
                 dataclasses.replace(
                     b,
-                    show=bool(b.description and show_close)
-                    if b.action == action and b.description == "Close"
+                    show=bool(b.description and show)
+                    if b.action == action and b.description == desc
                     else b.show,
                 )
                 for b in lst
@@ -3928,7 +3925,7 @@ class H5TUIApp(App):
         self.remove_class("view-dtable")
         self.remove_class("preview-maximized")
         self._preview.remove_class("browse-preview-table")
-        self._sync_close_footer_bindings()
+        self._sync_dataset_view_footer_bindings()
 
     def _ensure_h5_path_index(self) -> list[tuple[str, str]]:
         """Lazy list of ``(posix path, 'group'|'dataset')`` for :meth:`visititems`."""
@@ -4306,7 +4303,7 @@ class H5TUIApp(App):
             self._preview._df.focus()
         else:
             self._preview.focus()
-        self._sync_close_footer_bindings()
+        self._sync_dataset_view_footer_bindings()
 
     def refresh_lazy_1d_datatable(
         self,
@@ -4558,6 +4555,14 @@ class H5TUIApp(App):
             and self.focused is self._preview._df
         ):
             # Let MyDataTable handle h / l for column moves instead of app navigation.
+            return False
+        elif action in (
+            "group_find",
+            "global_fuzzy_find",
+            "find_next_match",
+            "find_prev_match",
+        ) and self.has_class("view-dataset"):
+            # Browse-only search; not applicable while a dataset is open full-screen.
             return False
         elif action in ("find_next_match", "find_prev_match") and isinstance(
             self.screen, _MODAL_SCREENS_ALL
