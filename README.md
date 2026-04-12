@@ -88,23 +88,27 @@ Non-table preview (scrollable **text**): **`j` / `k`**, **`u`** / **`d`** or pag
 
 ### Plotting
 
+#### Inline
+
 `h5tui` plots in the terminal with [plotext](https://github.com/piccolomo/plotext). **1D** arrays default to a scatter-style view; use **`v`** / **`V`** to switch line plot or histogram. **2D** arrays use a **heatmap**. Dimensions above 2 are not plotted.
 
 | Key | 1D data | 2D data |
 |:----|:--------|:--------|
 | `v` | Line plot | Heatmap |
 | `V` | Histogram | — |
-| `s` | Save plot as **PDF** (`matplotlib`) | Same |
 
-For **compound** datatypes, choose **x** and **y** in the menu when plotting.
-
-**Save as PDF** (`s`): in the dialog, **Esc** / **q** close, **Q** quit; **Tab** / **Enter** move among fields and **Save**.
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/7f9804b8-e86d-4fc7-9eb9-661237575fba" width="32%"/>
   <img src="https://github.com/user-attachments/assets/3097d704-0812-4856-851f-989fe92756f9" width="32%"/>
   <img src="https://github.com/user-attachments/assets/1a5a2f43-c3a6-4baa-87cb-01d684d61c77" width="32%"/>
 </p>
+
+For **compound** datatypes, choose **x** and **y** in the menu when plotting.
+
+#### Export as PDF
+
+**Save as PDF** (`s`): in the dialog, **Esc** / **q** close, **Q** quit; **Tab** / **Enter** move among fields and **Save**.
 
 <img width="1511" height="908" alt="compound plot axis menu" src="https://github.com/user-attachments/assets/90f6805e-165d-435a-84bd-3a16a2ec1502" />
 
