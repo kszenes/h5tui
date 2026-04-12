@@ -443,10 +443,9 @@ def _plot_preview_plain_1d(
 ) -> None:
     y = np.asarray(y)
     if histogram:
-        _plot_1d_histogram(plot_plt, y, title="Values")
+        _plot_1d_histogram(plot_plt, y)
         return
     xv = np.arange(y.shape[0]) if x is None else np.asarray(x)
-    plot_plt.title("Value vs Index")
     plot_plt.xlabel("Index")
     plot_plt.plot(xv, y, color="cyan", marker="braille")
 
@@ -568,9 +567,7 @@ def _mpl_set_dataset_title(ax, dset_name: str) -> None:
     ax.set_title(name if name else "dataset")
 
 
-def _save_1d_histogram_mpl(
-    path: str, data: np.ndarray, bins: int, *, dset_name: str
-) -> None:
+def _save_1d_histogram_mpl(path: str, data: np.ndarray, bins: int) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -579,7 +576,6 @@ def _save_1d_histogram_mpl(
     vals = np.asarray(data, dtype=np.float64).ravel()
     vals = vals[np.isfinite(vals)]
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    _mpl_set_dataset_title(ax, dset_name)
     if vals.size:
         ax.hist(vals, bins=max(1, int(bins)), color="steelblue", edgecolor="black")
     ax.set_xlabel("Value")
@@ -597,7 +593,6 @@ def _save_1d_lineplot_mpl(
     show_lines: bool,
     show_points: bool,
     show_smooth: bool,
-    dset_name: str,
 ) -> None:
     import matplotlib
 
@@ -608,7 +603,6 @@ def _save_1d_lineplot_mpl(
     n = int(y.shape[0])
     x = np.arange(n, dtype=float)
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    _mpl_set_dataset_title(ax, dset_name)
     if not (show_lines or show_points or show_smooth):
         ax.text(0.5, 0.5, "No display option selected", ha="center", va="center")
     else:
@@ -1203,7 +1197,7 @@ class SavePlotScreen(ModalScreen):
                     self.app.notify("Invalid bin count", severity="warning", timeout=2)
                     return
                 bins = max(1, bins)
-                _save_1d_histogram_mpl(out_path, data, bins, dset_name=self._dset_name)
+                _save_1d_histogram_mpl(out_path, data, bins)
             else:
                 lines = self.query_one("#line_lines", Checkbox).value
                 points = self.query_one("#line_points", Checkbox).value
@@ -1221,7 +1215,6 @@ class SavePlotScreen(ModalScreen):
                     show_lines=lines,
                     show_points=points,
                     show_smooth=smooth,
-                    dset_name=self._dset_name,
                 )
             self.app.notify(f"Saved to {toast_path}", timeout=3)
             self.app.pop_screen()
