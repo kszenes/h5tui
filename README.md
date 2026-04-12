@@ -70,6 +70,11 @@ Currently, this option will compute the min, max, and mean of the dataset but fu
 
 <img width="1920" height="1048" alt="image" src="https://github.com/user-attachments/assets/9698c153-74b2-4e8e-a433-55fe6149135e" />
 
+## Searching
+
+Use `/` to search for an entry within a group and `f` fuzzy searches through the entire file
+
+![search_demo](https://github.com/user-attachments/assets/3c501334-e09c-4ab6-9f3c-d418061446c5)
 
 ## Special Treatment of Dataframes
 
