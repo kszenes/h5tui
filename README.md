@@ -49,11 +49,27 @@ Items with associated attributes are marked with the symbol ▼ followed by the 
 1D arrays are displayed as scatter plots, and 2D arrays are shown as heatmaps. Higher dimensional tensors are not currently supported.
 The plotting can be toggled through the `p` keybinding while viewing a dataset.
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/7f9804b8-e86d-4fc7-9eb9-661237575fba" width="32%"/>
+  <img src="https://github.com/user-attachments/assets/3097d704-0812-4856-851f-989fe92756f9" width="32%"/>
+  <img src="https://github.com/user-attachments/assets/1a5a2f43-c3a6-4baa-87cb-01d684d61c77" width="32%"/>
+</p>
+
+Or save as pdf using `matplotlib` with the `s` key:
+
+<img width="1920" height="1048" alt="image" src="https://github.com/user-attachments/assets/6e5d2f97-deaf-4697-a618-9521be13ccde" />
+
+<img width="1511" height="908" alt="image" src="https://github.com/user-attachments/assets/90f6805e-165d-435a-84bd-3a16a2ec1502" />
+
+
 ## Aggregation
 
 `h5tui` also has limited data aggregation facilities for summarizing datasets.
 This can be activated through the `A` keybinding while viewing a dataset.
 Currently, this option will compute the min, max, and mean of the dataset but further statistics may be added in the future.
+
+<img width="1920" height="1048" alt="image" src="https://github.com/user-attachments/assets/9698c153-74b2-4e8e-a433-55fe6149135e" />
+
 
 ## Special Treatment of Dataframes
 
