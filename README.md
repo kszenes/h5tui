@@ -52,7 +52,7 @@ h5tui file.h5
 
 Datasets are opened in a viewer that supports the same type of VIM keybindings for navigating the cells.
 
-<img width="1512" height="900" alt="dataset table preview" src="https://github.com/user-attachments/assets/b416174e-d0c1-40f4-aea2-930c6b8a8388" />
+<img width="1512" height="902" alt="image" src="https://github.com/user-attachments/assets/fe5cda2e-f997-417e-8f13-5f233723dabf" />
 
 Additional keybindings:
 
