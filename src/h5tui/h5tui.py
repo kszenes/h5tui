@@ -3146,7 +3146,8 @@ class ColumnContent(VerticalScroll):
         Binding("j,down", "scroll_down", "Down", show=False),
         Binding("k,up", "scroll_up", "Up", show=False),
         # Do not bind J/K here: they would scroll this VerticalScroll (the preview shell)
-        # instead of the focused DataTable's ±10 row jump. Use j/k, or app J/K when the file list is focused.
+        # instead of the focused DataTable's ±10 row jump. Use j/k, or app J/K when the
+        # file list is focused (plot mode skips app J/K — preview is not vertically scrolled).
         Binding("u,pageup", "page_up", "Page up", show=False),
         Binding("d,pagedown", "page_down", "Page down", show=False),
         Binding("G", "scroll_end", "Bottom", show=False),
@@ -4511,24 +4512,24 @@ class H5TUIApp(App):
         self._header_widget.update(header)
 
     def action_scroll_preview_down(self) -> None:
-        """Nudge preview when file lists are focused (``J`` does not steal table jump)."""
+        """Nudge the data table or text preview when file columns are focused.
+
+        Plot mode disables vertical scroll on the preview shell (see
+        ``ColumnContent.allow_vertical_scroll``), so there is nothing to nudge—skip.
+        """
         self._clear_group_find_sticky()
-        if (
-            self.has_class("view-dtable")
-            and self.has_class("view-dataset")
-            and not self.has_class("view-plot")
-        ):
+        if self.has_class("view-plot"):
+            return
+        if self.has_class("view-dtable") and self.has_class("view-dataset"):
             self._preview._df.action_jump_down()
         else:
             self._preview.scroll_down()
 
     def action_scroll_preview_up(self) -> None:
         self._clear_group_find_sticky()
-        if (
-            self.has_class("view-dtable")
-            and self.has_class("view-dataset")
-            and not self.has_class("view-plot")
-        ):
+        if self.has_class("view-plot"):
+            return
+        if self.has_class("view-dtable") and self.has_class("view-dataset"):
             self._preview._df.action_jump_up()
         else:
             self._preview.scroll_up()
