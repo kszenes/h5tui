@@ -1,20 +1,33 @@
 
 <img width="300px" alt="h5tui-logo" src="https://github.com/user-attachments/assets/f3230869-38c5-414f-8fd1-44dd48c25322" />
 
+**h5tui** is a terminal UI for exploring [HDF5](https://www.hdfgroup.org/solutions/hdf5/) files. Navigation feels like vim-style file managers ([ranger](https://github.com/ranger/ranger), [lf](https://github.com/gokcehan/lf), [yazi](https://github.com/sxyazi/yazi))—a natural fit, because HDF5 stores data in a tree of groups and datasets.
+
+| Topic | Details |
+|:------|:--------|
+| **Mode** | Read-only: browse and inspect; files are not modified. |
+| **Stack** | Python · [Textual](https://github.com/Textualize/textual) · [h5py](https://github.com/h5py/h5py) · [plotext](https://github.com/piccolomo/plotext) |
+
 ## Demo
 
 ![demo_plots](https://github.com/user-attachments/assets/2a93b96c-8192-4867-b2de-6dbfe230e518)
 
-## Description
+## Contents
 
-`h5tui` is a terminal user interface (TUI) application for viewing the contents of [HDF5](https://www.hdfgroup.org/solutions/hdf5/) files, a binary file format prevalent in scientific computing and data science, straight in the terminal.
-Its design is inspired by vim-motion-enabled terminal file managers, such as [ranger](https://github.com/ranger/ranger), [lf](https://github.com/gokcehan/lf) and [yazi](https://github.com/sxyazi/yazi).
-This choice is natural since the HDF5 file format also adopts a directory structure for storing the data.
-
+- [Installation](#installation)
+- [Usage](#usage)
+- [Feature summary](#feature-summary)
+- [Tree and search](#tree-and-search)
+- [Dataset table](#dataset-table)
+- [Plots and export](#plots-and-export)
+- [Attributes](#attributes)
+- [Aggregation](#aggregation)
+- [Limitations](#limitations)
+- [Acknowledgements](#acknowledgements)
 
 ## Installation
 
-The package is hosted on [PyPI](https://pypi.org/project/h5tui/) and can be installed using `pip`:
+Published on [PyPI](https://pypi.org/project/h5tui/). Requires **Python ≥ 3.8.1**.
 
 ```sh
 pip install h5tui
@@ -22,43 +35,75 @@ pip install h5tui
 
 ## Usage
 
-Simply launch the application with an HDF5 file as an argument:
-
 ```sh
 h5tui file.h5
 ```
 
-## Documentation
+## Feature summary
 
-### File Navigation
+| Area | What you get |
+|:-----|:-------------|
+| **Browse** | Multi-column tree: groups 📁, datasets 📊; vim-style `h` / `j` / `k` / `l` plus arrows. |
+| **Search** | `/` search within the current group; `f` fuzzy search across the whole file. |
+| **Tables** | Dataset preview as a scrollable grid; copy cells, jump to rows. |
+| **Plots** | 1D line or histogram, 2D heatmap (via [plotext](https://github.com/piccolomo/plotext)); optional PDF export with `matplotlib`. |
+| **Metadata** | `a` opens attributes for the selected item. |
+| **Stats** | `A` summarizes the current dataset (per field for compound types). |
 
-`h5tui` starts at the root of the file and displays the contents of the root HDF5 group.
-The directory structure can be navigated using the arrow or standard vim motion keys, with the `up`/`down` (`j`/`k`) moving the cursor inside the current group, and `left`/`right` (`h`/`l`) for going to the parent or child HDF5 group.
-If the selected element is not an HDF5 group but an HDF5 dataset, then the dataset is displayed.
-If the entire dataset does not fit on the screen, it can be scrolled using the `up`/`down` `j`/`k` keybindings.
-Inside the file tree, Groups are denoted by 📁 while Datasets are denoted by 📊.
-To quickly return to the root of the file, press `~`.
+---
 
-#### Searching
+## Tree and search
 
-Use `/` to search for an entry within a group and `f` fuzzy searches through the entire file
+At startup you see the HDF5 root. **Up/down** (`k` / `j` or arrow keys) move inside the list; **left/right** (`h` / `l`) go to parent or child group. Selecting a **dataset** opens it in the preview. If the tree list is long, scroll it the same way. **`~`** jumps to the file root.
 
-![search_demo](https://github.com/user-attachments/assets/3c501334-e09c-4ab6-9f3c-d418061446c5)
+| Key | Action |
+|:----|:-------|
+| `h`, ← | Parent group |
+| `l`, → | Enter child group or open dataset |
+| `j` / `k`, ↓ / ↑ | Move cursor in the list |
+| `~` | Jump to root |
+| `/` | Find in **current group** |
+| `f` | **Fuzzy** find across the **entire** file |
+| `n` / `p` | Next / previous find match |
+| `a` | Open attributes for the selected item |
+| `i` | Toggle dark mode |
+| `escape` | Leave dataset preview (back to browse) |
+| `q` | Close modal / contextual quit |
+| `Q` | Quit application |
 
-### Viewing Datasets
+![search_demo](https://github.com/user-attachments/assets/3c501334-e09c-4f9c-9f3c-d418061446c5)
 
-When entering a dataset, the preview is maximized and the keys `h,j,k,l` can be used to navigate within the dataset (the capital keys `H,J,K,L` jump by 10 cells).
-The keys `G` and `g` can be used to jump to the beginning and end of the file, respectively, while the `:` key can be used to navigate to a specific row.
-The content of the currently selected cell can be copied to clipboard using `y`.
+---
 
-<img width="1512" height="900" alt="image" src="https://github.com/user-attachments/assets/b416174e-d0c1-40f4-aea2-930c6b8a8388" />
+## Dataset table
 
-### Plotting
+When a dataset is open, the preview is expanded. Move through the **data grid** with `h` / `j` / `k` / `l` (capital **`H` `J` `K` `L`** jump by 10 cells). Scroll long content with **`u`** / **`d`** (page up/down) where supported.
 
-`h5tui` provides convenient terminal plotting facilities using the [plotext](https://github.com/piccolomo/plotext) library.
-1D arrays are displayed as scatter plots, and 2D arrays are shown as heatmaps. Higher dimensional tensors are not currently supported.
-The plotting can be toggled through the `v/V` (line plot for 1d ) keybinding while selecting or viewing a dataset.
-For 1D data `v` plots a lineplot while `V` a histogram, for 2D data, `v` generates a heatmap.
+| Key | Action |
+|:----|:-------|
+| `h` / `j` / `k` / `l` | Move one cell |
+| `H` / `J` / `K` / `L` | Jump 10 cells |
+| `g` / `G` | Jump to top / bottom of the grid |
+| `:` | Go to a specific **row** |
+| `y` | Copy the current cell to the clipboard |
+
+<img width="1512" height="900" alt="dataset table preview" src="https://github.com/user-attachments/assets/b416174e-d0c1-40f4-aea2-930c6b8a8388" />
+
+---
+
+## Plots and export
+
+Terminal plotting uses [plotext](https://github.com/piccolomo/plotext). **1D** arrays default to a scatter-style view; toggle **line plot** or **histogram** while viewing a dataset. **2D** arrays render as a **heatmap**. Dimensions above 2 are not plotted.
+
+| Key | 1D data | 2D data |
+|:----|:--------|:--------|
+| `v` | Line plot | Heatmap |
+| `V` | Histogram | — |
+| `s` | Save plot as **PDF** (`matplotlib`) | Same |
+
+For **compound** datatypes, pick **x** and **y** fields from the menu when plotting.
+
+While the plot preview is focused, **`J`** / **`K`** scroll the preview when needed.
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/7f9804b8-e86d-4fc7-9eb9-661237575fba" width="32%"/>
@@ -66,32 +111,30 @@ For 1D data `v` plots a lineplot while `V` a histogram, for 2D data, `v` generat
   <img src="https://github.com/user-attachments/assets/1a5a2f43-c3a6-4baa-87cb-01d684d61c77" width="32%"/>
 </p>
 
-Or save as pdf using `matplotlib` with the `s` key.
-For compound datatypes, the x and y axis can be chosen from the menu.
+<img width="1511" height="908" alt="compound plot axis menu" src="https://github.com/user-attachments/assets/90f6805e-165d-435a-84bd-3a16a2ec1502" />
 
-<img width="1511" height="908" alt="image" src="https://github.com/user-attachments/assets/90f6805e-165d-435a-84bd-3a16a2ec1502" />
+---
 
+## Attributes
 
-### Attributes
-
-Items with associated attributes are marked with the symbol ▼ followed by the number of attributes. They can be viewed using the `a` character, which will open a popup with the attributes for that item. The navigation in this menu is analogous to the general menu. The menu can be exited using the `q` or `left,h` keys.
+Items that have HDF5 attributes show **▼** and a count. Press **`a`** to open a popup; navigation matches the rest of the UI. Close with **`q`** or **`h`** (back).
 
 ![demo_attrs](https://github.com/user-attachments/assets/8d992aa4-9a59-475b-b2e9-de40294729ef)
 
+---
 
-### Aggregation
+## Aggregation
 
-`h5tui` also has limited data aggregation facilities for summarizing datasets.
-This can be activated through the `A` keybinding while viewing a dataset.
-For compound datatypes, this aggregation is performed per field.
+Press **`A`** while viewing a dataset for a short **numerical summary**. For compound types, aggregation runs **per field**.
 
-<img width="1920" height="1048" alt="image" src="https://github.com/user-attachments/assets/9698c153-74b2-4e8e-a433-55fe6149135e" />
+<img width="1920" height="1048" alt="aggregation summary" src="https://github.com/user-attachments/assets/9698c153-74b2-4e8e-a433-55fe6149135e" />
 
+---
 
-### Limitations
+## Limitations
 
-`h5tui` is for reading HDF5 files and does not provide support for modifying the data.
+**h5tui** is read-only: it does not create, delete, or edit datasets or attributes.
 
-## Acknowlegements
+## Acknowledgements
 
-This project wouldn't have been possible without [h5py](https://github.com/h5py/h5py) for reading the HDF5 files, [textual](https://github.com/Textualize/textual) for building the UI, [plotext](https://github.com/piccolomo/plotext) for plotting data straight in the terminal and [matplotlib](https://github.com/matplotlib/matplotlib) for generating PDF plots, [numpy](https://github.com/numpy/numpy) for the numerics and [rapidfuzz](https://github.com/rapidfuzz/RapidFuzz) for the fuzzy searching.
+Thanks to [h5py](https://github.com/h5py/h5py), [Textual](https://github.com/Textualize/textual), [plotext](https://github.com/piccolomo/plotext), [matplotlib](https://github.com/matplotlib/matplotlib), [numpy](https://github.com/numpy/numpy), and [RapidFuzz](https://github.com/rapidfuzz/RapidFuzz) for the libraries this project builds on.
