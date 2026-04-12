@@ -25,7 +25,7 @@ from textual.geometry import clamp
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.content import Content
-from textual_plotext import PlotextPlot
+from textual_plotext import PlotextPlot as _BasePlotextPlot
 from rich.markup import escape
 from rich.text import Text
 
@@ -41,6 +41,30 @@ import dataclasses
 from collections import defaultdict
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
+
+
+class PlotextPlot(_BasePlotextPlot):
+    """PlotextPlot that re-feeds fresh data before every render.
+
+    Plotext's ``build_plot()`` applies ``log10`` to stored series data in place
+    when an axis uses ``\"log\"`` scale. Because Textual calls ``render()``
+    (and therefore ``build()``) on every repaint, the series would be
+    double-transformed on the second frame. We avoid this by storing the
+    callable that populates the figure and re-running it before each build.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._replot_fn = None
+
+    def set_replot(self, fn) -> None:
+        self._replot_fn = fn
+
+    def render(self):
+        if self._replot_fn is not None:
+            self._replot_fn()
+        return super().render()
+
 
 # Compound 1D plots: X axis option meaning row index (0..n-1), not a dtype field.
 COMPOUND_PLOT_INDEX = "__index__"
@@ -654,6 +678,28 @@ def _mask_for_log_axes(
     return x[m], y[m]
 
 
+def _log_decade_ticks(
+    v: np.ndarray, *, max_ticks: int = 8
+) -> tuple[list[float], list[str]]:
+    """Tick positions at integer powers of 10 with ``1e±N`` labels."""
+    v = np.asarray(v, dtype=np.float64)
+    v = v[v > 0]
+    if v.size == 0:
+        return [], []
+    lo = int(np.floor(np.log10(float(np.min(v)))))
+    hi = int(np.ceil(np.log10(float(np.max(v)))))
+    if lo == hi:
+        lo -= 1
+        hi += 1
+    exponents = list(range(lo, hi + 1))
+    if len(exponents) > max_ticks:
+        step = max(1, len(exponents) // max_ticks)
+        exponents = exponents[::step]
+    ticks = [10.0**e for e in exponents]
+    labels = [f"1e{e}" for e in exponents]
+    return ticks, labels
+
+
 def _plotext_compound_line(
     plot_plt,
     rec: np.ndarray,
@@ -680,6 +726,10 @@ def _plotext_compound_line(
         color="cyan",
         marker="braille",
     )
+    if log_x:
+        plot_plt.xticks(*_log_decade_ticks(xv))
+    if log_y:
+        plot_plt.yticks(*_log_decade_ticks(yv))
 
 
 def _save_compound_lineplot_mpl(
@@ -3227,86 +3277,124 @@ class ColumnContent(VerticalScroll):
             self._content.update(format_ndarray_text(np.asarray(data), line_width=lw))
 
     def replot(self):
-        """Plot data, currently only supports 1D and 2D data"""
+        """Plot data, currently only supports 1D and 2D data.
+
+        Builds a closure that populates the plotext figure from scratch and
+        registers it on ``self._plot`` so that every Textual ``render()``
+        re-feeds fresh data before ``build()``. This prevents plotext's
+        ``build_plot()`` from double-transforming series when log axes are used.
+        """
+        self._plot.set_replot(self._make_replot_fn())
+
+    def _make_replot_fn(self):
+        """Return a zero-arg callable that populates the plotext figure."""
         app = self.app
-        plt = self._plot.plt
+        plot_widget = self._plot
+
         if getattr(app, "_lazy_mode", False):
             path = getattr(app, "_lazy_dset_path", None)
             if not path:
-                return
+                return None
             dset = app._file[path]
             if not is_plotable_lazy_dset(dset):
-                return
+                return None
             if dset.dtype.fields is not None and dset.ndim == 1:
                 data = sample_dset_for_plot_1d(dset)
                 names = dtype_numeric_field_names(dset.dtype)
                 if not names:
-                    return
+                    return None
                 yk = getattr(app, "_compound_plot_y", "") or names[0]
                 if yk not in names:
                     yk = names[0]
                 hist_field: str | None = None
                 if bool(getattr(app, "_plot_histogram", False)):
                     hist_field = app._compound_histogram_value_field_for_preview()
-                _plot_preview_compound_1d(
-                    plt,
-                    data,
-                    histogram=bool(getattr(app, "_plot_histogram", False)),
-                    compound_x=str(
-                        getattr(app, "_compound_plot_x", COMPOUND_PLOT_INDEX)
-                    ),
-                    compound_y=str(yk),
-                    log_x=bool(getattr(app, "_compound_plot_log_x", False)),
-                    log_y=bool(getattr(app, "_compound_plot_log_y", False)),
-                    histogram_value_field=hist_field,
-                )
-                return
-            _plotext_reset_linear(plt)
+                is_hist = bool(getattr(app, "_plot_histogram", False))
+                cx = str(getattr(app, "_compound_plot_x", COMPOUND_PLOT_INDEX))
+                cy = str(yk)
+                lx = bool(getattr(app, "_compound_plot_log_x", False))
+                ly = bool(getattr(app, "_compound_plot_log_y", False))
+                hf = hist_field
+
+                def _replot_lazy_compound():
+                    _plot_preview_compound_1d(
+                        plot_widget.plt,
+                        data,
+                        histogram=is_hist,
+                        compound_x=cx,
+                        compound_y=cy,
+                        log_x=lx,
+                        log_y=ly,
+                        histogram_value_field=hf,
+                    )
+
+                return _replot_lazy_compound
+
             if dset.ndim == 1:
                 data = sample_dset_for_plot_1d(dset)
                 n = int(dset.shape[0])
                 x = np.linspace(0, n - 1, data.shape[0])
-                _plot_preview_plain_1d(
-                    plt,
-                    data,
-                    histogram=bool(getattr(app, "_plot_histogram", False)),
-                    x=x,
-                )
-            else:
-                _plot_preview_2d(plt, sample_dset_for_plot_2d(dset))
-            return
+                is_hist = bool(getattr(app, "_plot_histogram", False))
+
+                def _replot_lazy_1d():
+                    _plotext_reset_linear(plot_widget.plt)
+                    _plot_preview_plain_1d(
+                        plot_widget.plt, data, histogram=is_hist, x=x
+                    )
+
+                return _replot_lazy_1d
+
+            if dset.ndim >= 2:
+                data_2d = sample_dset_for_plot_2d(dset)
+
+                def _replot_lazy_2d():
+                    _plotext_reset_linear(plot_widget.plt)
+                    _plot_preview_2d(plot_widget.plt, data_2d)
+
+                return _replot_lazy_2d
+            return None
+
         raw = getattr(self.app, "_data", None)
         if raw is None:
-            return
+            return None
         data = np.squeeze(raw)
-        app = self.app
-        plt = self._plot.plt
+
         if data.dtype.fields is not None and data.ndim == 1:
             if not has_compound_plot_fields(data.dtype):
-                return
+                return None
             names = dtype_numeric_field_names(data.dtype)
             if not names:
-                return
+                return None
             yk = getattr(app, "_compound_plot_y", "") or names[0]
             if yk not in names:
                 yk = names[0]
             hist_field: str | None = None
             if bool(getattr(app, "_plot_histogram", False)):
                 hist_field = app._compound_histogram_value_field_for_preview()
-            _plot_preview_compound_1d(
-                plt,
-                data,
-                histogram=bool(getattr(app, "_plot_histogram", False)),
-                compound_x=str(getattr(app, "_compound_plot_x", COMPOUND_PLOT_INDEX)),
-                compound_y=str(yk),
-                log_x=bool(getattr(app, "_compound_plot_log_x", False)),
-                log_y=bool(getattr(app, "_compound_plot_log_y", False)),
-                histogram_value_field=hist_field,
-            )
-            return
+            is_hist = bool(getattr(app, "_plot_histogram", False))
+            cx = str(getattr(app, "_compound_plot_x", COMPOUND_PLOT_INDEX))
+            cy = str(yk)
+            lx = bool(getattr(app, "_compound_plot_log_x", False))
+            ly = bool(getattr(app, "_compound_plot_log_y", False))
+            hf = hist_field
+
+            def _replot_compound():
+                _plot_preview_compound_1d(
+                    plot_widget.plt,
+                    data,
+                    histogram=is_hist,
+                    compound_x=cx,
+                    compound_y=cy,
+                    log_x=lx,
+                    log_y=ly,
+                    histogram_value_field=hf,
+                )
+
+            return _replot_compound
+
         if not is_plotable(data):
-            return
-        _plotext_reset_linear(plt)
+            return None
+
         if data.ndim == 1:
             hist = bool(getattr(app, "_plot_histogram", False))
             arr = np.asarray(data)
@@ -3314,20 +3402,39 @@ class ColumnContent(VerticalScroll):
                 y = sample_ndarray_for_plot_1d(arr)
                 n = int(arr.shape[0])
                 xv = np.linspace(0, n - 1, y.shape[0])
-                _plot_preview_plain_1d(plt, y, histogram=False, x=xv)
-            else:
-                _plot_preview_plain_1d(
-                    plt,
-                    data,
-                    histogram=hist,
-                    x=np.arange(arr.shape[0]),
-                )
-        elif data.ndim == 2:
+
+                def _replot_1d_sampled():
+                    _plotext_reset_linear(plot_widget.plt)
+                    _plot_preview_plain_1d(plot_widget.plt, y, histogram=False, x=xv)
+
+                return _replot_1d_sampled
+
+            xv = np.arange(arr.shape[0])
+
+            def _replot_1d():
+                _plotext_reset_linear(plot_widget.plt)
+                _plot_preview_plain_1d(plot_widget.plt, data, histogram=hist, x=xv)
+
+            return _replot_1d
+
+        if data.ndim == 2:
             ad = np.asarray(data)
             if ad.shape[0] > _PLOT_MAX_2D or ad.shape[1] > _PLOT_MAX_2D:
-                _plot_preview_2d(plt, sample_ndarray_for_plot_2d(ad))
-            else:
-                _plot_preview_2d(plt, data)
+                sampled = sample_ndarray_for_plot_2d(ad)
+
+                def _replot_2d_sampled():
+                    _plotext_reset_linear(plot_widget.plt)
+                    _plot_preview_2d(plot_widget.plt, sampled)
+
+                return _replot_2d_sampled
+
+            def _replot_2d():
+                _plotext_reset_linear(plot_widget.plt)
+                _plot_preview_2d(plot_widget.plt, data)
+
+            return _replot_2d
+
+        return None
 
 
 class H5TUIApp(App):
@@ -3927,6 +4034,7 @@ class H5TUIApp(App):
         self.remove_class("view-dtable")
         self.remove_class("preview-maximized")
         self._preview.remove_class("browse-preview-table")
+        self._preview._plot.set_replot(None)
         self._sync_dataset_view_footer_bindings()
 
     def _ensure_h5_path_index(self) -> list[tuple[str, str]]:
@@ -4013,6 +4121,7 @@ class H5TUIApp(App):
             return
         if self.has_class("view-plot") and not self.has_class("view-dataset"):
             self.remove_class("view-plot")
+            self._preview._plot.set_replot(None)
             self._plot_histogram = False
             self._data = None
             self._pending_browse_compound_plot = None
@@ -5437,6 +5546,7 @@ class H5TUIApp(App):
         # Browse mode: plot the selected dataset without opening full preview (``l``).
         if self.has_class("view-plot") and not self.has_class("view-dataset"):
             self.remove_class("view-plot")
+            self._preview._plot.set_replot(None)
             self._plot_histogram = False
             self._data = None
             self._pending_browse_compound_plot = None
