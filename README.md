@@ -36,9 +36,6 @@ h5tui file.h5
 |:----|:-------|
 | `Enter` | Open the highlighted entry (same as `l` / →) |
 | `~` | Jump to root |
-| `/` | Find in the **current group** |
-| `f` | **Fuzzy** find across the **entire** file |
-| `n` / `p` | Next / previous find match |
 | `a` | Open **attributes** for the selection |
 | `i` | Toggle **dark mode** |
 
@@ -46,8 +43,9 @@ h5tui file.h5
 
 | Dialog | Extra detail |
 |:-------|:-------------|
-| **`/`** (group) | Type to filter; **Enter** confirms (see shared **Esc** / **q**). |
-| **`f`** (fuzzy path) | **Tab** switches between query and match list. |
+| `/` (group) | Type to filter; `Enter` confirms (see shared `Esc` / `q`). |
+| `n` / `p` | Next / previous find match |
+| `f` (fuzzy path) | `Tab` switches between query and match list. |
 
 ![search_demo](https://github.com/user-attachments/assets/b2d4b507-6bd7-40a6-a76b-f656b46224d9)
 
@@ -57,7 +55,7 @@ h5tui file.h5
 
 | Key | Action |
 |:----|:-------|
-| `:` | **Jump to row** (plain 1D/2D table only); in the dialog, **Enter** submits (see shared dismiss keys to cancel). |
+| `:` | Jump to row (plain 1D/2D table only); in the dialog, `Enter` submits (see shared dismiss keys to cancel). |
 | `y` | Copy the focused cell |
 
 ### Plotting
@@ -81,19 +79,19 @@ For **compound** datatypes, choose **x** and **y** in the menu.
 
 #### Export as PDF
 
-Press **`s`** to open dialog to **Save Plot As PDF**  via [matplotlib](https://github.com/matplotlib/matplotlib).
+Press `s` to open dialog to **Save Plot As PDF**  via [matplotlib](https://github.com/matplotlib/matplotlib).
 
 <img width="1511" height="908" alt="compound plot axis menu" src="https://github.com/user-attachments/assets/90f6805e-165d-435a-84bd-3a16a2ec1502" />
 
 ### Attributes
 
-Press **`a`** from the tree. Items with metadata show **▼** and a count.
+Press `a` from the tree. Items with metadata show **▼** and a count.
 
 ![demo_attrs](https://github.com/user-attachments/assets/8d992aa4-9a59-475b-b2e9-de40294729ef)
 
 ### Aggregation
 
-Press **`A`** while viewing a dataset for a **numerical summary** (per field for compound types).
+Press `A` while viewing a dataset for a **numerical summary** (per field for compound types).
 
 <img width="1920" height="1048" alt="aggregation summary" src="https://github.com/user-attachments/assets/9698c153-74b2-4e8e-a433-55fe6149135e" />
 
