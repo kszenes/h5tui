@@ -3047,6 +3047,13 @@ class ColumnContent(VerticalScroll):
         """Disable outer scroll for browse DataTable preview — avoids clipping labels/rows."""
         if self.has_class("browse-preview-table"):
             return False
+        # Plot mode: Plotext sizes to the pane width; a VerticalScroll gutter toggling on/off
+        # steals columns and reflows the plot (jumpy asciicast/GIF). Plot fits the shell — no need.
+        try:
+            if self.app.has_class("view-plot"):
+                return False
+        except (AttributeError, RuntimeError):
+            pass
         return super().allow_vertical_scroll
 
     BINDINGS = [

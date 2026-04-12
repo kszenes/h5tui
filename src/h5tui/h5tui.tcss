@@ -136,6 +136,11 @@ MyOptionList {
   display: none;
 }
 
+/* Plot fills the preview; outer VerticalScroll scrollbar steals width and plotext reflows (striped GIF). */
+.view-plot #content {
+  overflow-y: hidden;
+}
+
 /* Path line: bold, no box */
 #header {
   text-style: bold;
