@@ -36,12 +36,19 @@ The directory structure can be navigated using the arrow or standard vim motion 
 If the selected element is not an HDF5 group but an HDF5 dataset, then the dataset is displayed.
 If the entire dataset does not fit on the screen, it can be scrolled using the `up`/`down` `j`/`k` keybindings.
 Inside the file tree, Groups are denoted by 📁 while Datasets are denoted by 📊.
+To quickly return to the root of the file, press `~`.
 
-## Attributes
+### Searching
 
-Items with associated attributes are marked with the symbol ▼ followed by the number of attributes. They can be viewed using the `a` character, which will open a popup with the attributes for that item. The navigation in this menu is analogous to the general menu. The menu can be exited using the `q` or `left,h` keys.
+Use `/` to search for an entry within a group and `f` fuzzy searches through the entire file
 
-![demo_attrs](https://github.com/user-attachments/assets/8d992aa4-9a59-475b-b2e9-de40294729ef)
+![search_demo](https://github.com/user-attachments/assets/3c501334-e09c-4ab6-9f3c-d418061446c5)
+
+## Viewing Datasets
+
+When entering a dataset, the preview is maximized and the keys `h,j,k,l` can be used to navigate within the dataset (the capital keys `H,J,K,L` jump by 10 cells).
+The keys `G` and `g` can be used to jump to the beginning and end of the file, respectively, while the `:` key can be used to navigate to a specific row.
+The content of the currently selected cell can be copied to clipboard using `y`.
 
 ## Plotting
 
@@ -55,32 +62,27 @@ The plotting can be toggled through the `p` keybinding while viewing a dataset.
   <img src="https://github.com/user-attachments/assets/1a5a2f43-c3a6-4baa-87cb-01d684d61c77" width="32%"/>
 </p>
 
-Or save as pdf using `matplotlib` with the `s` key:
-
-<img width="1920" height="1048" alt="image" src="https://github.com/user-attachments/assets/6e5d2f97-deaf-4697-a618-9521be13ccde" />
+Or save as pdf using `matplotlib` with the `s` key.
+For compound datatypes, the x and y axis can be chosen from the menu.
 
 <img width="1511" height="908" alt="image" src="https://github.com/user-attachments/assets/90f6805e-165d-435a-84bd-3a16a2ec1502" />
+
+
+## Attributes
+
+Items with associated attributes are marked with the symbol ▼ followed by the number of attributes. They can be viewed using the `a` character, which will open a popup with the attributes for that item. The navigation in this menu is analogous to the general menu. The menu can be exited using the `q` or `left,h` keys.
+
+![demo_attrs](https://github.com/user-attachments/assets/8d992aa4-9a59-475b-b2e9-de40294729ef)
 
 
 ## Aggregation
 
 `h5tui` also has limited data aggregation facilities for summarizing datasets.
 This can be activated through the `A` keybinding while viewing a dataset.
-Currently, this option will compute the min, max, and mean of the dataset but further statistics may be added in the future.
+For compound datatypes, this aggregation is performed per field.
 
 <img width="1920" height="1048" alt="image" src="https://github.com/user-attachments/assets/9698c153-74b2-4e8e-a433-55fe6149135e" />
 
-## Searching
-
-Use `/` to search for an entry within a group and `f` fuzzy searches through the entire file
-
-![search_demo](https://github.com/user-attachments/assets/3c501334-e09c-4ab6-9f3c-d418061446c5)
-
-## Special Treatment of Dataframes
-
-Dataframes, which `h5py` stores in the form of an `np.recarray` are pretty-printed using the `textual` `DataTable` widget. The table can be navigated vertically using the `k`/`j` keys and horizontally using the capital keys `H`,`L`, to avoid clashing with the `h` key which would take you back to the directory structure.
-
-![image](https://github.com/user-attachments/assets/eaf07aad-ffba-483e-8740-d9ac85fa6eab)
 
 ## Limitations
 
