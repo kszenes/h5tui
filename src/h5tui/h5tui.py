@@ -1263,11 +1263,11 @@ def _summary_wide_row_from_streaming_stats(
 
 
 def _summary_wide_row_from_plain_ndarray(arr: np.ndarray) -> tuple[str, ...]:
-    """Single full-array summary; column header is ``value`` (whole dataset)."""
+    """Single full-array summary; no column title (one stats column)."""
     flat_max = int(np.argmax(arr))
     flat_min = int(np.argmin(arr))
     return (
-        "value",
+        "",
         f"{float(np.mean(arr)):.5g}",
         f"{float(np.var(arr)):.5g}",
         f"{float(np.std(arr)):.5g}",
@@ -1349,14 +1349,21 @@ class DatasetSummaryScreen(ModalScreen):
                 "streaming_stats_by_field"
             )
         wide: list[tuple[str, ...]] = []
+        wide_clip: list[tuple[str, ...]] = []
         if streaming_stats is not None:
             wide.append(
-                _summary_wide_row_from_streaming_stats(streaming_stats, field="value")
+                _summary_wide_row_from_streaming_stats(streaming_stats, field="")
+            )
+            wide_clip.append(
+                _summary_wide_row_clipboard_streaming_stats(streaming_stats, field="")
             )
         elif streaming_stats_by_field is not None:
             for fname, st in streaming_stats_by_field.items():
                 wide.append(
                     _summary_wide_row_from_streaming_stats(st, field=str(fname))
+                )
+                wide_clip.append(
+                    _summary_wide_row_clipboard_streaming_stats(st, field=str(fname))
                 )
         else:
             assert data is not None
@@ -1368,11 +1375,18 @@ class DatasetSummaryScreen(ModalScreen):
                             str(fname), arr[fname]
                         )
                     )
+                    wide_clip.append(
+                        _summary_wide_row_clipboard_compound_field_column(
+                            str(fname), arr[fname]
+                        )
+                    )
             else:
                 wide.append(_summary_wide_row_from_plain_ndarray(arr))
+                wide_clip.append(_summary_wide_row_clipboard_plain_ndarray(arr))
         self._summary_columns, self._summary_stat_rows = _transpose_summary_wide_rows(
             wide
         )
+        _, self._summary_clipboard_stat_rows = _transpose_summary_wide_rows(wide_clip)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="summary_dialog"):
@@ -1388,6 +1402,16 @@ class DatasetSummaryScreen(ModalScreen):
             table.add_row(*cells, label=stat_label)
         table.cursor_type = "cell"
         table.focus()
+
+    def clipboard_for_datatable_cell(self, row: int, column: int) -> str | None:
+        """Clipboard text for summary grid cell (full scalar repr, not ``.5g`` display)."""
+        rows = self._summary_clipboard_stat_rows
+        if row < 0 or column < 0 or row >= len(rows):
+            return None
+        _label, cells = rows[row]
+        if column >= len(cells):
+            return None
+        return cells[column]
 
     def action_quit_summary(self) -> None:
         self.app.pop_screen()
@@ -1714,6 +1738,59 @@ def _scalar_clipboard_str(value: object) -> str:
     return str(value)
 
 
+def _summary_wide_row_clipboard_streaming_stats(
+    st: dict[str, float], *, field: str
+) -> tuple[str, ...]:
+    """Parallel to ``_summary_wide_row_from_streaming_stats`` using ``_scalar_clipboard_str``."""
+    idx_placeholder = "— (chunked scan)"
+    return (
+        field,
+        _scalar_clipboard_str(float(st["mean"])),
+        _scalar_clipboard_str(float(st["var"])),
+        _scalar_clipboard_str(float(st["std"])),
+        _scalar_clipboard_str(float(st["L2 norm"])),
+        _scalar_clipboard_str(float(st["max"])),
+        idx_placeholder,
+        _scalar_clipboard_str(float(st["min"])),
+        idx_placeholder,
+    )
+
+
+def _summary_wide_row_clipboard_plain_ndarray(arr: np.ndarray) -> tuple[str, ...]:
+    flat_max = int(np.argmax(arr))
+    flat_min = int(np.argmin(arr))
+    return (
+        "",
+        _scalar_clipboard_str(float(np.mean(arr))),
+        _scalar_clipboard_str(float(np.var(arr))),
+        _scalar_clipboard_str(float(np.std(arr))),
+        _scalar_clipboard_str(float(np.linalg.norm(arr))),
+        _scalar_clipboard_str(float(np.max(arr))),
+        _format_stat_index(arr, flat_max),
+        _scalar_clipboard_str(float(np.min(arr))),
+        _format_stat_index(arr, flat_min),
+    )
+
+
+def _summary_wide_row_clipboard_compound_field_column(
+    field: str, col: np.ndarray
+) -> tuple[str, ...]:
+    arr = np.asarray(col, dtype=np.float64)
+    flat_max = int(np.argmax(arr))
+    flat_min = int(np.argmin(arr))
+    return (
+        field,
+        _scalar_clipboard_str(float(np.mean(arr))),
+        _scalar_clipboard_str(float(np.var(arr))),
+        _scalar_clipboard_str(float(np.std(arr))),
+        _scalar_clipboard_str(float(np.linalg.norm(arr))),
+        _scalar_clipboard_str(float(np.max(arr))),
+        str(flat_max),
+        _scalar_clipboard_str(float(np.min(arr))),
+        str(flat_min),
+    )
+
+
 def _dt_row_label_plain(dt: DataTable, row_index: int) -> str:
     rk = dt.ordered_rows[row_index]
     # Textual 8+: ``ordered_rows`` holds ``Row`` objects (``.label`` on the row);
@@ -1742,6 +1819,12 @@ def _datatable_source_clipboard_str(app, dt: DataTable) -> str | None:
     r, c = dt.cursor_coordinate
     if r < 0 or c < 0:
         return None
+
+    scr = getattr(app, "screen", None)
+    if isinstance(scr, DatasetSummaryScreen) and getattr(dt, "id", None) == (
+        "summary_datatable"
+    ):
+        return scr.clipboard_for_datatable_cell(r, c)
 
     if getattr(app, "_lazy_1d_windowed", False) and getattr(
         app, "_lazy_dset_path", None
