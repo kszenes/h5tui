@@ -2869,12 +2869,43 @@ def aggregate_h5_compound_numeric_chunks(
     return out
 
 
-def sample_dset_for_plot_1d(dset: h5py.Dataset) -> np.ndarray:
-    n = int(dset.shape[0])
+def _plot_1d_stride_for_length(n: int) -> int | None:
+    """Stride for ``[::step]`` so length is capped; ``None`` = read full 1D (small enough)."""
     if n <= _PLOT_MAX_1D:
+        return None
+    return max(1, int(np.ceil(n / _PLOT_MAX_1D)))
+
+
+def sample_ndarray_for_plot_1d(arr: np.ndarray) -> np.ndarray:
+    """Same downsampling rule as :func:`sample_dset_for_plot_1d`, on an in-memory array."""
+    a = np.asarray(arr)
+    n = int(a.shape[0])
+    st = _plot_1d_stride_for_length(n)
+    if st is None:
+        return a
+    return np.asarray(a[::st])
+
+
+def sample_dset_for_plot_1d(dset: h5py.Dataset) -> np.ndarray:
+    """Downsample long 1D series for the terminal preview (and save-from-plot).
+
+    Uses strided slices instead of fancy indices so gzip-compressed HDF5 reads stay fast.
+    """
+    n = int(dset.shape[0])
+    st = _plot_1d_stride_for_length(n)
+    if st is None:
         return np.asarray(dset[:])
-    idx = np.linspace(0, n - 1, _PLOT_MAX_1D, dtype=np.intp)
-    return np.asarray(dset[idx])
+    return np.asarray(dset[::st])
+
+
+def sample_ndarray_for_plot_2d(arr: np.ndarray) -> np.ndarray:
+    r, c = int(arr.shape[0]), int(arr.shape[1])
+    mr, mc = min(_PLOT_MAX_2D, r), min(_PLOT_MAX_2D, c)
+    if r <= _PLOT_MAX_2D and c <= _PLOT_MAX_2D:
+        return np.asarray(arr[:, :])
+    rs = max(1, int(np.ceil(r / mr)))
+    cs = max(1, int(np.ceil(c / mc)))
+    return np.asarray(arr[::rs, ::cs])
 
 
 def sample_dset_for_plot_2d(dset: h5py.Dataset) -> np.ndarray:
@@ -2882,11 +2913,9 @@ def sample_dset_for_plot_2d(dset: h5py.Dataset) -> np.ndarray:
     mr, mc = min(_PLOT_MAX_2D, r), min(_PLOT_MAX_2D, c)
     if r <= _PLOT_MAX_2D and c <= _PLOT_MAX_2D:
         return np.asarray(dset[:, :])
-    ri = np.linspace(0, r - 1, mr, dtype=np.intp)
-    ci = np.linspace(0, c - 1, mc, dtype=np.intp)
-    # h5py allows only 1D fancy indices; ``np.ix_`` is not supported on Dataset.
-    rows = np.asarray(dset[ri])
-    return rows[:, ci]
+    rs = max(1, int(np.ceil(r / mr)))
+    cs = max(1, int(np.ceil(c / mc)))
+    return np.asarray(dset[::rs, ::cs])
 
 
 def add_escape_chars(string: str):
@@ -3173,14 +3202,26 @@ class ColumnContent(VerticalScroll):
             return
         _plotext_reset_linear(plt)
         if data.ndim == 1:
-            _plot_preview_plain_1d(
-                plt,
-                data,
-                histogram=bool(getattr(app, "_plot_histogram", False)),
-                x=np.arange(data.shape[0]),
-            )
+            hist = bool(getattr(app, "_plot_histogram", False))
+            arr = np.asarray(data)
+            if not hist and arr.shape[0] > _PLOT_MAX_1D:
+                y = sample_ndarray_for_plot_1d(arr)
+                n = int(arr.shape[0])
+                xv = np.linspace(0, n - 1, y.shape[0])
+                _plot_preview_plain_1d(plt, y, histogram=False, x=xv)
+            else:
+                _plot_preview_plain_1d(
+                    plt,
+                    data,
+                    histogram=hist,
+                    x=np.arange(arr.shape[0]),
+                )
         elif data.ndim == 2:
-            _plot_preview_2d(plt, data)
+            ad = np.asarray(data)
+            if ad.shape[0] > _PLOT_MAX_2D or ad.shape[1] > _PLOT_MAX_2D:
+                _plot_preview_2d(plt, sample_ndarray_for_plot_2d(ad))
+            else:
+                _plot_preview_2d(plt, data)
 
 
 class H5TUIApp(App):
@@ -4681,6 +4722,39 @@ class H5TUIApp(App):
         self._large_confirm_timer = None
         self._large_op_arm = None
 
+    def _sample_dset_or_open_data_for_plot_1d(
+        self, path: str, dset: h5py.Dataset
+    ) -> np.ndarray:
+        """Downsample for plot; reuse ``_data`` when this dataset is already loaded."""
+        if getattr(self, "_open_dataset_path", None) == path and not getattr(
+            self, "_lazy_mode", False
+        ):
+            raw = getattr(self, "_data", None)
+            if isinstance(raw, np.ndarray) and raw.ndim == 1:
+                if tuple(int(x) for x in raw.shape) == tuple(
+                    int(x) for x in dset.shape
+                ):
+                    ds_comp = dset.dtype.fields is not None
+                    ar_comp = raw.dtype.fields is not None
+                    if ds_comp == ar_comp:
+                        return sample_ndarray_for_plot_1d(np.asarray(raw))
+        return sample_dset_for_plot_1d(dset)
+
+    def _sample_dset_or_open_data_for_plot_2d(
+        self, path: str, dset: h5py.Dataset
+    ) -> np.ndarray:
+        if getattr(self, "_open_dataset_path", None) == path and not getattr(
+            self, "_lazy_mode", False
+        ):
+            raw = getattr(self, "_data", None)
+            if isinstance(raw, np.ndarray) and raw.ndim == 2:
+                if tuple(int(x) for x in raw.shape) == tuple(
+                    int(x) for x in dset.shape
+                ):
+                    if dset.dtype.fields is None and raw.dtype.fields is None:
+                        return sample_ndarray_for_plot_2d(np.asarray(raw))
+        return sample_dset_for_plot_2d(dset)
+
     def _with_large_dataset_confirm(
         self, arm_key: tuple, n: int, element_threshold: int, run
     ) -> None:
@@ -4741,7 +4815,7 @@ class H5TUIApp(App):
                     )
                     return
                 try:
-                    sampled = sample_dset_for_plot_1d(dset)
+                    sampled = self._sample_dset_or_open_data_for_plot_1d(path, dset)
                 except Exception as e:
                     self.notify(
                         f"Could not read dataset: {e}", severity="error", timeout=8
@@ -4775,7 +4849,7 @@ class H5TUIApp(App):
                 )
                 return
             try:
-                sampled = sample_dset_for_plot_1d(dset)
+                sampled = self._sample_dset_or_open_data_for_plot_1d(path, dset)
             except Exception as e:
                 self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
                 return
@@ -4801,9 +4875,9 @@ class H5TUIApp(App):
 
         try:
             if dset.ndim == 1:
-                sampled = sample_dset_for_plot_1d(dset)
+                sampled = self._sample_dset_or_open_data_for_plot_1d(path, dset)
             else:
-                sampled = sample_dset_for_plot_2d(dset)
+                sampled = self._sample_dset_or_open_data_for_plot_2d(path, dset)
         except Exception as e:
             self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
             return
@@ -4826,7 +4900,7 @@ class H5TUIApp(App):
             return
         self._plot_histogram = False
         self._data = sampled
-        self.notify("Plotting...", timeout=2)
+        self.notify("Plotting...", timeout=1)
         self._preview.remove_class("browse-preview-table")
         self.add_class("view-plot")
         self._preview.replot()
@@ -5129,7 +5203,7 @@ class H5TUIApp(App):
                         timeout=4,
                     )
                 self._plot_histogram = False
-                self.notify("Plotting...", timeout=2)
+                self.notify("Plotting...", timeout=1)
                 self.toggle_class("view-plot")
                 self._preview.replot()
             else:
