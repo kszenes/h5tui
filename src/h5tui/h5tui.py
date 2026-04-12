@@ -924,7 +924,13 @@ class SavePlotScreen(ModalScreen):
                             f"Save 2D plot · {self._dset_name}", id="save_plot_title"
                         )
                         yield Input(value=self._default_filename, id="save_filename")
-                        yield Button("Save", variant="primary", id="save_plot_btn")
+                        with HorizontalGroup(classes="save-actions-row"):
+                            yield Button("Save", variant="primary", id="save_plot_btn")
+                            yield Checkbox(
+                                "Sample",
+                                value=False,
+                                id="save_sample",
+                            )
             yield Footer()
             return
 
@@ -990,7 +996,13 @@ class SavePlotScreen(ModalScreen):
                             "Smooth (cubic spline)", value=False, id="line_smooth"
                         )
                     yield Input(value=self._default_filename, id="save_filename")
-                    yield Button("Save", variant="primary", id="save_plot_btn")
+                    with HorizontalGroup(classes="save-actions-row"):
+                        yield Button("Save", variant="primary", id="save_plot_btn")
+                        yield Checkbox(
+                            "Sample",
+                            value=False,
+                            id="save_sample",
+                        )
         yield Footer()
 
     def _apply_select_border_titles(self) -> None:
@@ -1118,11 +1130,20 @@ class SavePlotScreen(ModalScreen):
         if not path_in:
             self.app.notify("Enter a filename", severity="warning", timeout=2)
             return
+        try:
+            sample = bool(self.query_one("#save_sample", Checkbox).value)
+        except NoMatches:
+            sample = False
+        resolved = self.app._resolve_save_plot_data(sample=sample)
+        if resolved[0] is None:
+            self.app.notify("Could not load data for save", severity="error", timeout=6)
+            return
+        data = np.asarray(resolved[0])
         out_path = _resolve_plot_save_output_path(path_in)
         toast_path = _format_plot_save_toast_path(out_path)
         if self._heatmap_2d:
             try:
-                _save_2d_heatmap_mpl(out_path, self._data, dset_name=self._dset_name)
+                _save_2d_heatmap_mpl(out_path, data, dset_name=self._dset_name)
                 self.app.notify(f"Saved to {toast_path}", timeout=3)
                 self.app.pop_screen()
             except OSError as e:
@@ -1148,7 +1169,7 @@ class SavePlotScreen(ModalScreen):
                         )
                         return
                     _save_compound_histogram_mpl(
-                        out_path, self._data, str(hf), bins, dset_name=self._dset_name
+                        out_path, data, str(hf), bins, dset_name=self._dset_name
                     )
                 else:
                     lines = self.query_one("#line_lines", Checkbox).value
@@ -1165,7 +1186,7 @@ class SavePlotScreen(ModalScreen):
                     yk = str(self.query_one("#compound_y", Select).value)
                     _save_compound_lineplot_mpl(
                         out_path,
-                        self._data,
+                        data,
                         x_key=xk,
                         y_key=yk,
                         log_x=self.query_one("#compound_log_x", Checkbox).value,
@@ -1182,9 +1203,7 @@ class SavePlotScreen(ModalScreen):
                     self.app.notify("Invalid bin count", severity="warning", timeout=2)
                     return
                 bins = max(1, bins)
-                _save_1d_histogram_mpl(
-                    out_path, self._data, bins, dset_name=self._dset_name
-                )
+                _save_1d_histogram_mpl(out_path, data, bins, dset_name=self._dset_name)
             else:
                 lines = self.query_one("#line_lines", Checkbox).value
                 points = self.query_one("#line_points", Checkbox).value
@@ -1198,7 +1217,7 @@ class SavePlotScreen(ModalScreen):
                     return
                 _save_1d_lineplot_mpl(
                     out_path,
-                    self._data,
+                    data,
                     show_lines=lines,
                     show_points=points,
                     show_smooth=smooth,
@@ -4511,8 +4530,15 @@ class H5TUIApp(App):
                     timeout=2,
                 )
 
-    def _get_save_plot_context(self) -> tuple[np.ndarray | None, str | None]:
-        """Return array data for the save dialog and basename for default ``{{name}}.pdf``."""
+    def _resolve_save_plot_data(
+        self, *, sample: bool
+    ) -> tuple[np.ndarray | None, str | None]:
+        """Load array data for PDF export.
+
+        ``sample=False`` (default in the save dialog) prefers full ``dset[...]`` when
+        feasible. ``sample=True`` matches the terminal preview caps
+        (``sample_*_for_plot_*`` / ``sample_ndarray_for_plot_*``).
+        """
         path: str | None = None
         data_arr = None
 
@@ -4521,16 +4547,53 @@ class H5TUIApp(App):
             if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
                 dset = self._file[self._lazy_dset_path]
                 if dset.ndim == 1:
-                    data_arr = sample_dset_for_plot_1d(dset)
+                    try:
+                        data_arr = (
+                            sample_dset_for_plot_1d(dset)
+                            if sample
+                            else np.asarray(dset[...])
+                        )
+                    except Exception:
+                        return None, None
                 elif dset.ndim == 2 and is_plotable_lazy_dset(dset):
-                    data_arr = sample_dset_for_plot_2d(dset)
+                    try:
+                        data_arr = (
+                            sample_dset_for_plot_2d(dset)
+                            if sample
+                            else np.asarray(dset[...])
+                        )
+                    except Exception:
+                        return None, None
                 else:
                     return None, None
             else:
-                data_arr = self._data
+                raw = self._data
+                if raw is None:
+                    return None, None
+                arr = np.asarray(raw)
+                if sample:
+                    if arr.ndim == 1:
+                        data_arr = sample_ndarray_for_plot_1d(arr)
+                    elif arr.ndim == 2 and is_plain_numeric_2d_grid(arr):
+                        data_arr = sample_ndarray_for_plot_2d(arr)
+                    else:
+                        data_arr = arr
+                else:
+                    data_arr = arr
         elif self.has_class("view-plot") and self._data is not None:
             path = self.get_selected_dataset_path()
-            data_arr = self._data
+            if sample:
+                data_arr = self._data
+            else:
+                if path is None:
+                    return None, None
+                try:
+                    node = self._file[path]
+                    if not isinstance(node, h5py.Dataset):
+                        return None, None
+                    data_arr = np.asarray(node[...])
+                except Exception:
+                    return None, None
         else:
             path = self.get_selected_dataset_path()
             if path is None:
@@ -4544,19 +4607,31 @@ class H5TUIApp(App):
             dset = node
             if dset.ndim == 1:
                 try:
-                    data_arr = np.asarray(dset[...])
+                    data_arr = (
+                        sample_dset_for_plot_1d(dset)
+                        if sample
+                        else np.asarray(dset[...])
+                    )
                 except Exception:
                     return None, None
             elif dset.ndim == 2 and is_plotable_lazy_dset(dset):
                 try:
-                    data_arr = sample_dset_for_plot_2d(dset)
+                    data_arr = (
+                        sample_dset_for_plot_2d(dset)
+                        if sample
+                        else np.asarray(dset[...])
+                    )
                 except Exception:
                     return None, None
             else:
                 try:
-                    data_arr = np.asarray(dset[...])
+                    full = np.asarray(dset[...])
                 except Exception:
                     return None, None
+                if sample and is_plain_numeric_2d_grid(full):
+                    data_arr = sample_ndarray_for_plot_2d(full)
+                else:
+                    data_arr = full
 
         if data_arr is None:
             return None, None
@@ -4912,7 +4987,7 @@ class H5TUIApp(App):
         if isinstance(self.screen, _MODAL_SCREENS_ALL):
             return
         self._clear_group_find_sticky()
-        data, name = self._get_save_plot_context()
+        data, name = self._resolve_save_plot_data(sample=False)
         if data is None or name is None:
             self.notify(
                 "Select or open a plottable dataset (1D or 2D) to save as a plot",

@@ -485,6 +485,20 @@ SavePlotScreen #save_plot_scroll {
   border-title-color: $foreground;
 }
 
+#save-plot-dialog .save-actions-row {
+  width: 100%;
+  height: auto;
+  margin: 1 0 0 0;
+  align: left middle;
+}
+
+#save-plot-dialog .save-actions-row Checkbox#save_sample {
+  width: auto;
+  height: auto;
+  min-height: 1;
+  margin: 0 0 0 1;
+}
+
 #save_plot_btn,
 #confirm_plot_btn,
 #confirm_hist_plot_btn {
@@ -501,4 +515,9 @@ SavePlotScreen #save_plot_scroll {
 #confirm_hist_plot_btn:focus {
   border: tall $foreground 45%;
   background-tint: $foreground 8%;
+}
+
+#save-plot-dialog .save-actions-row #save_plot_btn {
+  width: 1fr;
+  margin: 0;
 }
