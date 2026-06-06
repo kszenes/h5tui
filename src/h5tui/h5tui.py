@@ -1,44 +1,43 @@
-from textual import on, _widget_navigation
-from textual.app import App, ComposeResult
-from textual.events import Resize
-from textual.reactive import Reactive
-from textual.widgets import (
-    Footer,
-    Header,
-    OptionList,
-    Static,
-    DataTable,
-    Select,
-    Checkbox,
-    Input,
-    Button,
-)
-from textual.containers import (
-    VerticalScroll,
-    Horizontal,
-    Vertical,
-    VerticalGroup,
-    HorizontalGroup,
-)
-from textual.binding import Binding
-from textual.geometry import clamp
-from textual.css.query import NoMatches
-from textual.screen import ModalScreen
-from textual.content import Content
-from textual_plotext import PlotextPlot as _BasePlotextPlot
-from rich.markup import escape
-from rich.text import Text
+import argparse
+import dataclasses
+import os
+import re
+import sys
+from collections import defaultdict
 
 import h5py
 import numpy as np
 from rapidfuzz import fuzz, process
-
-import sys
-import os
-import re
-import argparse
-import dataclasses
-from collections import defaultdict
+from rich.markup import escape
+from rich.text import Text
+from textual import _widget_navigation, on
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import (
+    Horizontal,
+    HorizontalGroup,
+    Vertical,
+    VerticalGroup,
+    VerticalScroll,
+)
+from textual.content import Content
+from textual.css.query import NoMatches
+from textual.events import Resize
+from textual.geometry import clamp
+from textual.reactive import Reactive
+from textual.screen import ModalScreen
+from textual.widgets import (
+    Button,
+    Checkbox,
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    OptionList,
+    Select,
+    Static,
+)
+from textual_plotext import PlotextPlot as _BasePlotextPlot
 
 UNICODE_SUPPORT = sys.stdout.encoding.lower().startswith("utf")
 
@@ -73,6 +72,11 @@ COMPOUND_PLOT_INDEX = "__index__"
 _ND_THRESHOLD = 1000
 _ND_EDGEITEMS = 3
 _ND_LINEWIDTH_DEFAULT = 75
+
+# Display mode constants for the ``x`` key toggle.
+_DISPLAY_DECIMAL = 0
+_DISPLAY_HEX = 1
+_DISPLAY_SCIENTIFIC = 2
 
 
 def h5_child_path(parent: str, name: str) -> str:
@@ -535,7 +539,7 @@ def _cubic_smooth_xy(
 
 
 def _open_saved_plot_path(path: str) -> None:
-    """Open ``path`` with the OS default application (e.g. PDF viewer)."""
+    """Open ``path`` with the OS default application (e.g. PNG viewer)."""
     import os
     import shutil
     import subprocess
@@ -572,7 +576,7 @@ def _resolve_plot_save_output_path(user_input: str) -> str:
     if os.path.dirname(p):
         return os.path.normpath(p)
     os.makedirs(_RELATIVE_PLOT_SAVE_DIR, exist_ok=True)
-    base = os.path.basename(p) or "plot.pdf"
+    base = os.path.basename(p) or "plot.png"
     return os.path.normpath(os.path.join(_RELATIVE_PLOT_SAVE_DIR, base))
 
 
@@ -851,7 +855,7 @@ def is_plain_numeric_2d_grid(arr: np.ndarray) -> bool:
 
 
 class SavePlotScreen(ModalScreen):
-    """Save dataset as PDF via matplotlib: 1D line/histogram, compound line/histogram, or 2D heatmap.
+    """Save dataset as PNG via matplotlib: 1D line/histogram, compound line/histogram, or 2D heatmap.
 
     Compound 1D datasets: line plot with X/Y field choosers and optional log axes;
     histogram uses one numeric field.
@@ -905,7 +909,7 @@ class SavePlotScreen(ModalScreen):
         else:
             self._default_bins = _default_histogram_bins(self._data)
         safe = dset_name.replace("/", "_").strip() or "plot"
-        self._default_filename = f"{safe}.pdf"
+        self._default_filename = f"{safe}.png"
         self._init_compound_x = compound_x
         self._init_compound_y = compound_y
         self._init_compound_log_x = compound_log_x
@@ -1471,6 +1475,111 @@ class DatasetSummaryScreen(ModalScreen):
         self.app.exit()
 
 
+def parse_slice_expr(expr: str) -> tuple:
+    """Parse a numpy-style slice expression like '0:10' or '0:10,1:5' into tuple of slices."""
+    parts = [p.strip() for p in expr.split(",")]
+    result: list = []
+    for p in parts:
+        if not p:
+            result.append(slice(None))
+            continue
+        bits = p.split(":")
+        if len(bits) == 1:
+            val = bits[0].strip()
+            if not val:
+                result.append(slice(None))
+            else:
+                result.append(int(val))
+        elif len(bits) == 2:
+            s = int(bits[0]) if bits[0].strip() else None
+            e = int(bits[1]) if bits[1].strip() else None
+            result.append(slice(s, e))
+        elif len(bits) == 3:
+            s = int(bits[0]) if bits[0].strip() else None
+            e = int(bits[1]) if bits[1].strip() else None
+            st = int(bits[2]) if bits[2].strip() else None
+            result.append(slice(s, e, st))
+        else:
+            raise ValueError(f"Invalid slice component: {p}")
+    return tuple(result)
+
+
+def parse_reshape_expr(expr: str) -> tuple:
+    """Parse a reshape expression like '10,10' or '-1,100' or ':' into a tuple of ints.
+
+    ``:`` inside the parentheses is a shorthand for ``-1`` (auto-infer dimension).
+    """
+    parts = [p.strip() for p in expr.split(",")]
+    # Strip trailing empty parts (from trailing comma like "-1,").
+    while parts and not parts[-1]:
+        parts.pop()
+    if not parts or not any(parts):
+        raise ValueError("Empty reshape expression")
+    result: list[int] = []
+    for p in parts:
+        if not p:
+            raise ValueError("Empty dimension in reshape expression")
+        if p == ":":
+            result.append(-1)
+            continue
+        try:
+            v = int(p)
+        except ValueError:
+            raise ValueError(f"Invalid dimension: {p!r} is not an integer")
+        result.append(v)
+    return tuple(result)
+
+
+def parse_slice_reshape_expr(expr: str) -> tuple[list, str, str]:
+    """Parse a combined slice/reshape expression.
+
+    ``[...]`` encloses a slice expression, ``(...)`` encloses a reshape expression.
+    They may appear in either order (left-to-right = execution order).
+    Returns ``(operations, raw_slice_str, raw_reshape_str)`` where *operations* is a
+    list of ``("slice", tuple)`` / ``("reshape", tuple)`` pairs.
+    """
+    import re
+
+    ops: list = []
+    raw_slice = ""
+    raw_reshape = ""
+
+    # Find bracketed blocks in left-to-right order.
+    pattern = re.compile(r"\[([^\]]*)\]|\(([^)]*)\)")
+    matches = list(pattern.finditer(expr))
+
+    if not matches:
+        # No brackets/parens: treat entire input as a legacy slice expression.
+        raw_slice = expr.strip()
+        if raw_slice:
+            ops.append(("slice", parse_slice_expr(raw_slice)))
+        return ops, raw_slice, raw_reshape
+
+    for m in matches:
+        if m.group(1) is not None:  # [...] slice block
+            raw_slice = m.group(1).strip()
+            if raw_slice:
+                ops.append(("slice", parse_slice_expr(raw_slice)))
+        else:  # (...) reshape block
+            raw_reshape = m.group(2).strip()
+            if raw_reshape:
+                ops.append(("reshape", parse_reshape_expr(raw_reshape)))
+
+    return ops, raw_slice, raw_reshape
+
+
+def _build_slice_reshape_expr(app) -> str:
+    """Reconstruct the combined slice/reshape expression from active state."""
+    sl_expr = getattr(app, "_active_slice_expr", "")
+    rp_expr = getattr(app, "_active_reshape_expr", "")
+    parts = []
+    if sl_expr:
+        parts.append(f"[{sl_expr}]")
+    if rp_expr:
+        parts.append(f"({rp_expr})")
+    return "".join(parts)
+
+
 class JumpToLineScreen(ModalScreen):
     """Enter a row index (0-based, matching table row labels) for plain 1D/2D tables."""
 
@@ -1516,6 +1625,107 @@ class JumpToLineScreen(ModalScreen):
             )
             return
         self.app.apply_jump_to_line_row(idx)
+        self.app.pop_screen()
+
+
+class DatasetSliceScreen(ModalScreen):
+    """Enter a numpy-style slice and/or reshape expression.
+
+    ``[...]`` encloses a slice, ``(...)`` encloses a reshape.
+    Examples: ``[0:10]``, ``(10,10)``, ``[0:100](-1,)``, ``(:)[:,:,0]``.
+    """
+
+    BINDINGS = [
+        Binding("escape,q", "close_slice", "Close", show=True, priority=True),
+        Binding("Q", "quit_application", "Quit app", show=False, priority=True),
+        Binding("up,k", "history_prev", "Prev", show=False, priority=True),
+        Binding("down,j", "history_next", "Next", show=False, priority=True),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="slice-dialog"):
+            yield Input(
+                placeholder="e.g. [0:10], (10,10), [0:100](-1,)",
+                id="slice_input",
+            )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        dlg = self.query_one("#slice-dialog", Vertical)
+        dlg.border_title = "Slice/Reshape"
+        self._history_idx: int | None = None
+        self._user_text: str = ""
+        inp = self.query_one("#slice_input", Input)
+        # Reconstruct the active expression from state.
+        prev = _build_slice_reshape_expr(self.app)
+        if prev:
+            inp.value = prev
+        inp.focus()
+
+    def _history_len(self) -> int:
+        return len(getattr(self.app, "_slice_history", ()))
+
+    def action_history_prev(self) -> None:
+        n = self._history_len()
+        if n == 0:
+            return
+        inp = self.query_one("#slice_input", Input)
+        if self._history_idx is None:
+            self._user_text = inp.value
+            self._history_idx = n - 1
+        elif self._history_idx > 0:
+            self._history_idx -= 1
+        else:
+            return
+        hist = self.app._slice_history
+        inp.value = hist[self._history_idx]
+        inp.action_end()
+
+    def action_history_next(self) -> None:
+        if self._history_idx is None:
+            return
+        inp = self.query_one("#slice_input", Input)
+        n = self._history_len()
+        if self._history_idx < n - 1:
+            self._history_idx += 1
+            inp.value = self.app._slice_history[self._history_idx]
+            inp.action_end()
+        else:
+            # Past the last entry: restore user text.
+            self._history_idx = None
+            inp.value = self._user_text
+            inp.action_end()
+
+    @on(Input.Changed, "#slice_input")
+    def _on_input_changed(self, event: Input.Changed) -> None:
+        # Reset history position when the user edits manually.
+        if self._history_idx is not None:
+            cur = self.app._slice_history[self._history_idx]
+            if event.value != cur:
+                self._history_idx = None
+                self._user_text = event.value
+
+    def action_close_slice(self) -> None:
+        self.app.pop_screen()
+
+    def action_quit_application(self) -> None:
+        self.app.exit()
+
+    @on(Input.Submitted, "#slice_input")
+    def _on_submitted(self, event: Input.Submitted) -> None:
+        raw = event.value.strip()
+        if not raw:
+            self.app.pop_screen()
+            return
+        try:
+            ops, raw_slice, raw_reshape = parse_slice_reshape_expr(raw)
+        except (ValueError, OverflowError) as e:
+            self.app.notify(f"Invalid expression: {e}", severity="warning", timeout=2)
+            return
+        if not ops:
+            self.app.pop_screen()
+            return
+        self.app.apply_slice_reshape(ops, raw, raw_slice, raw_reshape)
         self.app.pop_screen()
 
 
@@ -1722,6 +1932,7 @@ _MODAL_SCREENS_ALL = (
     SavePlotScreen,
     DatasetSummaryScreen,
     JumpToLineScreen,
+    DatasetSliceScreen,
     GroupFindScreen,
     GlobalFuzzyFindScreen,
 )
@@ -1729,6 +1940,7 @@ _MODAL_SCREENS_CHILD = (
     SavePlotScreen,
     DatasetSummaryScreen,
     JumpToLineScreen,
+    DatasetSliceScreen,
     GroupFindScreen,
     GlobalFuzzyFindScreen,
 )
@@ -2090,16 +2302,20 @@ class MyDataTable(DataTable):
             header_row.append(Align(column.label, "center", width=inner))
         return RowRenderables(None, header_row)
 
-    def update(self, value):
+    def update(self, value, *, display_mode: int = _DISPLAY_DECIMAL):
         self.clear(columns=True)
         self.add_columns(*get_colnames(value))
         for i, row in enumerate(value):
             # Match browse/lazy tables: pre-format so sign alignment isn't column-dependent
             # (Textual left-aligns the first column vs others when given raw scalars).
-            cells = tuple(_format_table_cell(e) for e in row.item())
+            cells = tuple(
+                _format_table_cell(e, display_mode=display_mode) for e in row.item()
+            )
             self.add_row(*cells, label=str(i))
 
-    def update_1d(self, arr: np.ndarray) -> None:
+    def update_1d(
+        self, arr: np.ndarray, *, display_mode: int = _DISPLAY_DECIMAL
+    ) -> None:
         """Fill one unnamed column; row labels are ``0``, ``1``, … (no colon; text preview uses ``i:``)."""
         a = np.asarray(arr)
         self.clear(columns=True)
@@ -2108,11 +2324,13 @@ class MyDataTable(DataTable):
             return
         for i in range(int(a.shape[0])):
             self.add_row(
-                _format_table_cell(a[i]),
+                _format_table_cell(a[i], display_mode=display_mode),
                 label=str(i),
             )
 
-    def update_2d(self, arr: np.ndarray) -> None:
+    def update_2d(
+        self, arr: np.ndarray, *, display_mode: int = _DISPLAY_DECIMAL
+    ) -> None:
         """Fill one column per matrix column; row index is a non-interactive label."""
         a = np.asarray(arr)
         self.clear(columns=True)
@@ -2122,10 +2340,15 @@ class MyDataTable(DataTable):
         self.add_columns(*(str(j) for j in range(ncols)))
         for i in range(nrows):
             row = a[i]
-            cells = tuple(_format_table_cell(row[j]) for j in range(ncols))
+            cells = tuple(
+                _format_table_cell(row[j], display_mode=display_mode)
+                for j in range(ncols)
+            )
             self.add_row(*cells, label=str(i))
 
-    def update_1d_window(self, arr: np.ndarray, base_index: int) -> None:
+    def update_1d_window(
+        self, arr: np.ndarray, base_index: int, *, display_mode: int = _DISPLAY_DECIMAL
+    ) -> None:
         """1D table with global row labels ``base_index`` … (sliding window)."""
         a = np.asarray(arr)
         self.clear(columns=True)
@@ -2135,7 +2358,7 @@ class MyDataTable(DataTable):
         bi = int(base_index)
         for i in range(int(a.shape[0])):
             self.add_row(
-                _format_table_cell(a[i]),
+                _format_table_cell(a[i], display_mode=display_mode),
                 label=str(bi + i),
             )
 
@@ -2147,6 +2370,7 @@ class MyDataTable(DataTable):
         *,
         field_start: int,
         n_fields_total: int,
+        display_mode: int = _DISPLAY_DECIMAL,
     ) -> None:
         """Sliding window over 1D compound rows; ``field_names`` is a slice of HDF5 fields."""
         self.clear(columns=True)
@@ -2163,10 +2387,20 @@ class MyDataTable(DataTable):
         else:
             self.border_title = f"fields [{lo}:{hi}] / {n_fields_total}"
         for i in range(int(chunk.shape[0])):
-            cells = tuple(_format_table_cell(chunk[f][i]) for f in field_names)
+            cells = tuple(
+                _format_table_cell(chunk[f][i], display_mode=display_mode)
+                for f in field_names
+            )
             self.add_row(*cells, label=str(bi + i))
 
-    def update_2d_window(self, arr: np.ndarray, base_row: int, base_col: int) -> None:
+    def update_2d_window(
+        self,
+        arr: np.ndarray,
+        base_row: int,
+        base_col: int,
+        *,
+        display_mode: int = _DISPLAY_DECIMAL,
+    ) -> None:
         """2D grid with global column headers and row labels (sliding view)."""
         a = np.asarray(arr)
         self.clear(columns=True)
@@ -2177,7 +2411,10 @@ class MyDataTable(DataTable):
         self.add_columns(*(str(bc + j) for j in range(ncols)))
         for i in range(nrows):
             row = a[i]
-            cells = tuple(_format_table_cell(row[j]) for j in range(ncols))
+            cells = tuple(
+                _format_table_cell(row[j], display_mode=display_mode)
+                for j in range(ncols)
+            )
             self.add_row(*cells, label=str(br + i))
 
 
@@ -2602,7 +2839,9 @@ def _browse_preview_datatable_eligible(dset: h5py.Dataset) -> bool:
     return dset.ndim in (1, 2)
 
 
-def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> None:
+def fill_browse_preview_datatable(
+    dset: h5py.Dataset, table: MyDataTable, *, display_mode: int = _DISPLAY_DECIMAL
+) -> None:
     """Fill browse preview: up to ``PREVIEW_TABLE_1D_ROWS`` / ``PREVIEW_TABLE_2D_SIZE`` with edge ``…``."""
     if dset.dtype.fields is not None and dset.ndim == 1:
         names = dset.dtype.names
@@ -2621,7 +2860,10 @@ def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> Non
             col_labels.append(_PREVIEW_ELLIPSIS)
         table.add_columns(*col_labels)
         for i in range(m):
-            cells = tuple(_format_table_cell(chunk[f][i]) for f in field_names)
+            cells = tuple(
+                _format_table_cell(chunk[f][i], display_mode=display_mode)
+                for f in field_names
+            )
             if more_cols:
                 cells = cells + (_PREVIEW_ELLIPSIS,)
             table.add_row(*cells, label=str(i))
@@ -2639,7 +2881,9 @@ def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> Non
         table.clear(columns=True)
         table.add_columns("")
         for i in range(int(a.shape[0])):
-            table.add_row(_format_table_cell(a[i]), label=str(i))
+            table.add_row(
+                _format_table_cell(a[i], display_mode=display_mode), label=str(i)
+            )
         if n > PREVIEW_TABLE_1D_ROWS:
             table.add_row(_PREVIEW_ELLIPSIS, label=_PREVIEW_ELLIPSIS)
         return
@@ -2651,7 +2895,7 @@ def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> Non
                 vec = dset[:, 0]
             else:
                 vec = dset[0, :]
-            fill_browse_preview_datatable(vec, table)
+            fill_browse_preview_datatable(vec, table, display_mode=display_mode)
             return
         br = min(PREVIEW_TABLE_2D_SIZE, r)
         bc = min(PREVIEW_TABLE_2D_SIZE, c)
@@ -2664,7 +2908,10 @@ def fill_browse_preview_datatable(dset: h5py.Dataset, table: MyDataTable) -> Non
         table.add_columns(*col_labels)
         for i in range(nrows):
             row = arr[i]
-            cells = tuple(_format_table_cell(row[j]) for j in range(ncols))
+            cells = tuple(
+                _format_table_cell(row[j], display_mode=display_mode)
+                for j in range(ncols)
+            )
             if c > bc:
                 cells = cells + (_PREVIEW_ELLIPSIS,)
             table.add_row(*cells, label=str(i))
@@ -2771,7 +3018,27 @@ def _format_array_element(v) -> str:
     )
 
 
-def _format_table_cell(v: object) -> str:
+def _scalar_hex_str(v: object) -> str:
+    """Format an integer as hexadecimal using two's complement for signed types."""
+    if isinstance(v, np.integer):
+        iv = int(v)
+        bits = int(np.iinfo(v.dtype).bits)
+    else:
+        iv = int(v)
+        bits = 64
+    # Two's complement: mask to the type width so negative values render unsigned.
+    mask = (1 << bits) - 1
+    iv = iv & mask
+    nibbles = max(1, (bits + 3) // 4)
+    return "0x" + format(iv, "x").rjust(nibbles, "0")
+
+
+def _scalar_sci_str(v: object) -> str:
+    """Format an integer as scientific notation via float conversion."""
+    return format(float(v), ".6e")
+
+
+def _format_table_cell(v: object, *, display_mode: int = _DISPLAY_DECIMAL) -> str:
     """Format one scalar for DataTable cells (1D, 2D, compound, text preview).
 
     Bytes/str pass through; structured/object/non-scalar arrays use
@@ -2795,15 +3062,30 @@ def _format_table_cell(v: object) -> str:
     if np.issubdtype(x.dtype, np.bool_):
         return str(bool(e))
     if np.issubdtype(x.dtype, np.integer):
+        if display_mode == _DISPLAY_HEX:
+            iv = int(e)
+            bits = int(np.iinfo(x.dtype).bits)
+            # Two's complement: mask to the type width so negative values
+            # render as their unsigned equivalent (e.g. int8 -5 → 0xfb).
+            mask = (1 << bits) - 1
+            iv = iv & mask
+            nibbles = max(1, (bits + 3) // 4)
+            return " 0x" + format(iv, "x").rjust(nibbles, "0")
+        if display_mode == _DISPLAY_SCIENTIFIC:
+            return format(float(e), " .6e")
         return format(int(e), " d")
     if np.issubdtype(x.dtype, np.complexfloating):
         return _format_array_element(v)
     if np.issubdtype(x.dtype, np.inexact):
+        if display_mode == _DISPLAY_SCIENTIFIC:
+            return format(float(e), " .6e")
         return format(float(e), " f")
     return _format_array_element(v)
 
 
-def format_1d_with_indices(arr: np.ndarray) -> str:
+def format_1d_with_indices(
+    arr: np.ndarray, *, display_mode: int = _DISPLAY_DECIMAL
+) -> str:
     """Format 1D data as ``index: value`` rows (browse preview); respects threshold/edgeitems."""
     a = np.asarray(arr)
     n = int(a.shape[0])
@@ -2815,7 +3097,7 @@ def format_1d_with_indices(arr: np.ndarray) -> str:
         return ""
 
     def line(i: int) -> str:
-        return f"{i:>{idxw}}: {_format_table_cell(a[i])}"
+        return f"{i:>{idxw}}: {_format_table_cell(a[i], display_mode=display_mode)}"
 
     if n <= threshold or n <= 2 * edgeitems:
         return "\n".join(line(i) for i in range(n))
@@ -2828,22 +3110,33 @@ def format_1d_with_indices(arr: np.ndarray) -> str:
 
 
 def format_ndarray_text(
-    arr: np.ndarray, *, line_width: int = _ND_LINEWIDTH_DEFAULT
+    arr: np.ndarray,
+    *,
+    line_width: int = _ND_LINEWIDTH_DEFAULT,
+    display_mode: int = _DISPLAY_DECIMAL,
 ) -> str:
     """Human-readable ndarray text; 1D uses indexed rows, other shapes use array2string."""
     a = _as_display_1d(np.asarray(arr))
     if is_plain_1d_array(a):
-        return format_1d_with_indices(a)
+        return format_1d_with_indices(a, display_mode=display_mode)
+    kwargs = {}
+    if display_mode == _DISPLAY_HEX:
+        kwargs["formatter"] = {"int": _scalar_hex_str}
+    elif display_mode == _DISPLAY_SCIENTIFIC:
+        kwargs["formatter"] = {"int": _scalar_sci_str}
     return np.array2string(
         a,
         max_line_width=line_width,
         threshold=_ND_THRESHOLD,
         edgeitems=_ND_EDGEITEMS,
         suppress_small=False,
+        **kwargs,
     )
 
 
-def format_1d_with_indices_lazy(dset: h5py.Dataset) -> str:
+def format_1d_with_indices_lazy(
+    dset: h5py.Dataset, *, display_mode: int = _DISPLAY_DECIMAL
+) -> str:
     """Indexed 1D text using only head/tail slices (no full vector load)."""
     n = int(dset.shape[0])
     edgeitems = _ND_EDGEITEMS
@@ -2852,7 +3145,7 @@ def format_1d_with_indices_lazy(dset: h5py.Dataset) -> str:
         return ""
 
     def line(i: int, val: object) -> str:
-        return f"{i:>{idxw}}: {_format_table_cell(val)}"
+        return f"{i:>{idxw}}: {_format_table_cell(val, display_mode=display_mode)}"
 
     if n <= _ND_THRESHOLD or n <= 2 * edgeitems:
         a = np.asarray(dset[:n])
@@ -2867,16 +3160,23 @@ def format_1d_with_indices_lazy(dset: h5py.Dataset) -> str:
     return "\n".join(parts)
 
 
-def format_ndarray_text_lazy(dset: h5py.Dataset, *, line_width: int) -> str:
+def format_ndarray_text_lazy(
+    dset: h5py.Dataset, *, line_width: int, display_mode: int = _DISPLAY_DECIMAL
+) -> str:
     """Abbreviated text for a large on-disk dataset without loading it entirely."""
     if dset.dtype.fields is not None:
         return "(unsupported dtype for text preview)"
     if dset.dtype == np.dtype("O"):
         if dset.ndim == 1:
-            return format_1d_with_indices_lazy(dset)
+            return format_1d_with_indices_lazy(dset, display_mode=display_mode)
         return "(unsupported dtype for text preview)"
     if dset.ndim == 1:
-        return format_1d_with_indices_lazy(dset)
+        return format_1d_with_indices_lazy(dset, display_mode=display_mode)
+    kwargs = {}
+    if display_mode == _DISPLAY_HEX:
+        kwargs["formatter"] = {"int": _scalar_hex_str}
+    elif display_mode == _DISPLAY_SCIENTIFIC:
+        kwargs["formatter"] = {"int": _scalar_sci_str}
     if dset.ndim == 2:
         r, c = int(dset.shape[0]), int(dset.shape[1])
         rs, cs = min(8, r), min(12, c)
@@ -2887,6 +3187,7 @@ def format_ndarray_text_lazy(dset: h5py.Dataset, *, line_width: int) -> str:
             threshold=_ND_THRESHOLD,
             edgeitems=_ND_EDGEITEMS,
             suppress_small=False,
+            **kwargs,
         )
         return f"shape {dset.shape} (top-left {rs}×{cs})\n{body}\n…"
     sl = tuple(slice(0, min(4, int(s))) for s in dset.shape)
@@ -2897,6 +3198,7 @@ def format_ndarray_text_lazy(dset: h5py.Dataset, *, line_width: int) -> str:
         threshold=min(_ND_THRESHOLD, 100),
         edgeitems=min(_ND_EDGEITEMS, 2),
         suppress_small=False,
+        **kwargs,
     )
     return f"shape {dset.shape}\n{body}\n…"
 
@@ -3215,12 +3517,33 @@ class ColumnContent(VerticalScroll):
     def reprint(self):
         """Refresh dataset text or table content using ``H5TUIApp._data``."""
         app = self.app
+        display_mode = getattr(app, "_display_mode", _DISPLAY_DECIMAL)
+        active_slice = getattr(app, "_active_slice", None)
+        active_reshape = getattr(app, "_active_reshape", None)
+
         if getattr(app, "_lazy_mode", False):
             path = getattr(app, "_lazy_dset_path", None)
             if not path:
                 return
             dset = app._file[path]
             lw = int(getattr(app, "_preview_line_width", _ND_LINEWIDTH_DEFAULT))
+
+            if active_slice is not None or active_reshape is not None:
+                # Slice/reshape is active: read the portion from disk and render as non-lazy.
+                try:
+                    data = np.asarray(
+                        dset[active_slice] if active_slice is not None else dset[...]
+                    )
+                    if active_reshape is not None:
+                        data = np.reshape(data, active_reshape)
+                except (IndexError, ValueError) as e:
+                    self.notify(
+                        f"Slice/reshape error: {e}", severity="error", timeout=3
+                    )
+                    return
+                self._render_non_lazy(data, display_mode)
+                return
+
             if _lazy_h5_plain_1d_datatable(dset):
                 extra = (
                     " — vlen UTF-8 strings, row window"
@@ -3254,27 +3577,60 @@ class ColumnContent(VerticalScroll):
                 severity="information",
                 timeout=3,
             )
-            self._content.update(format_ndarray_text_lazy(dset, line_width=lw))
+            self._content.update(
+                format_ndarray_text_lazy(dset, line_width=lw, display_mode=display_mode)
+            )
             self.focus()
             return
+
         data = getattr(app, "_data", None)
         if data is None:
             return
+
+        if active_slice is not None:
+            try:
+                data = np.asarray(data)[active_slice]
+            except (IndexError, ValueError) as e:
+                self.notify(f"Slice error: {e}", severity="error", timeout=3)
+                return
+
+        if active_reshape is not None:
+            try:
+                data = np.reshape(np.asarray(data), active_reshape)
+            except ValueError as e:
+                self.notify(f"Reshape error: {e}", severity="error", timeout=3)
+                return
+
+        self._render_non_lazy(data, display_mode)
+
+    def _render_non_lazy(self, data, display_mode: int) -> None:
+        """Render an ndarray as DataTable or text (non-lazy path)."""
+        app = self.app
         lw = int(getattr(app, "_preview_line_width", _ND_LINEWIDTH_DEFAULT))
         if is_dataframe(data):
+            app.add_class("view-dtable")
             self.notify(_KEYS_HELP_TABLE_2D)
-            self._df.update(data)
+            self._df.update(data, display_mode=display_mode)
             self._df.focus()
         elif should_use_1d_table(data):
+            app.add_class("view-dtable")
             self.notify(_KEYS_HELP_TABLE_1D)
-            self._df.update_1d(_as_display_1d(np.asarray(data)))
+            self._df.update_1d(
+                _as_display_1d(np.asarray(data)), display_mode=display_mode
+            )
             self._df.focus()
         elif should_use_2d_table(data):
+            app.add_class("view-dtable")
             self.notify(_KEYS_HELP_TABLE_2D)
-            self._df.update_2d(np.asarray(data))
+            self._df.update_2d(np.asarray(data), display_mode=display_mode)
             self._df.focus()
         else:
-            self._content.update(format_ndarray_text(np.asarray(data), line_width=lw))
+            app.remove_class("view-dtable")
+            self._content.update(
+                format_ndarray_text(
+                    np.asarray(data), line_width=lw, display_mode=display_mode
+                )
+            )
 
     def replot(self):
         """Plot data, currently only supports 1D and 2D data.
@@ -3290,8 +3646,14 @@ class ColumnContent(VerticalScroll):
         """Return a zero-arg callable that populates the plotext figure."""
         app = self.app
         plot_widget = self._plot
+        active_slice = getattr(app, "_active_slice", None)
+        active_reshape = getattr(app, "_active_reshape", None)
 
-        if getattr(app, "_lazy_mode", False):
+        if (
+            getattr(app, "_lazy_mode", False)
+            and active_slice is None
+            and active_reshape is None
+        ):
             path = getattr(app, "_lazy_dset_path", None)
             if not path:
                 return None
@@ -3354,10 +3716,42 @@ class ColumnContent(VerticalScroll):
                 return _replot_lazy_2d
             return None
 
-        raw = getattr(self.app, "_data", None)
-        if raw is None:
-            return None
-        data = np.squeeze(raw)
+        # When slice/reshape is active, apply transformations before plotting.
+        if (active_slice is not None or active_reshape is not None) and getattr(
+            app, "_lazy_mode", False
+        ):
+            lz_path = getattr(app, "_lazy_dset_path", None)
+            if not lz_path:
+                return None
+            try:
+                raw = np.asarray(
+                    app._file[lz_path][active_slice]
+                    if active_slice is not None
+                    else app._file[lz_path][...]
+                )
+                if active_reshape is not None:
+                    raw = np.reshape(raw, active_reshape)
+                raw = np.squeeze(raw)
+            except (IndexError, ValueError):
+                return None
+        else:
+            raw = getattr(self.app, "_data", None)
+            if raw is None:
+                return None
+            raw = np.asarray(raw)
+            if active_slice is not None:
+                try:
+                    raw = raw[active_slice]
+                except (IndexError, ValueError):
+                    return None
+            if active_reshape is not None:
+                try:
+                    raw = np.reshape(raw, active_reshape)
+                except ValueError:
+                    return None
+            raw = np.squeeze(raw)
+
+        data = raw
 
         if data.dtype.fields is not None and data.ndim == 1:
             if not has_compound_plot_fields(data.dtype):
@@ -3463,6 +3857,8 @@ class H5TUIApp(App):
         Binding("f", "global_fuzzy_find", "Fuzz", show=True),
         Binding("J", "scroll_preview_down", "Scroll preview", show=False),
         Binding("K", "scroll_preview_up", "Scroll preview", show=False),
+        Binding("x", "toggle_hex", "Disp", show=True),
+        Binding("S", "dataset_slice", "Slice", show=True),
     ]
     CSS_PATH = "h5tui.tcss"
     TITLE = "h5tui"
@@ -3519,6 +3915,17 @@ class H5TUIApp(App):
         self._lazy_2d_window_col = 0
         self._lazy_structured_1d = False
         self._lazy_struct_field_start = 0
+        self._display_mode = _DISPLAY_DECIMAL
+
+        # Active slice: tuple of slice objects (e.g. (slice(0,10),)), or None.
+        self._active_slice: tuple | None = None
+        self._active_slice_expr: str = ""
+        self._slice_history: list[str] = []
+        # Active reshape: tuple of ints (e.g. (10, 10) or (-1, 100)), or None.
+        self._active_reshape: tuple | None = None
+        self._active_reshape_expr: str = ""
+        self._reshape_history: list[str] = []
+        self._cached_stats_text: str = ""
         self._browse_find_open = False
         self._group_find_query = ""
         self._browse_find_saved_highlight = 0
@@ -3559,11 +3966,68 @@ class H5TUIApp(App):
             except Exception:
                 return self._header_content(self._cur_dir)
             if isinstance(node, h5py.Dataset):
-                return self._header_content(
-                    vk,
-                    dataset_meta=format_dataset_header_metadata(node),
+                meta = (
+                    format_dataset_header_metadata(node)
+                    + self._current_dataset_stats_text()
                 )
+                return self._header_content(vk, dataset_meta=meta)
         return self._header_content(self._cur_dir)
+
+    def _compute_and_cache_stats(self) -> None:
+        """Compute compact stats for the current dataset and cache the result.
+
+        For in-memory data, stats are computed directly.  For lazy datasets
+        the chunked streaming aggregator is used (one full scan).
+        """
+        self._cached_stats_text = ""
+        # Try in-memory path first (non-lazy, or lazy with active slice/reshape).
+        data = self._get_aggregate_data_context()
+        if data is not None and is_aggregatable(data):
+            try:
+                a = data.ravel()
+                if a.size > 0:
+                    self._cached_stats_text = (
+                        f" | mean={np.mean(a):.4g} std={np.std(a):.4g} "
+                        f"min={np.min(a):.4g} max={np.max(a):.4g}"
+                    )
+            except Exception:
+                pass
+            return
+        # Lazy path: use streaming chunked stats.
+        if (
+            getattr(self, "_lazy_mode", False)
+            and self._lazy_dset_path
+            and self.has_class("view-dataset")
+        ):
+            try:
+                dset = self._file[self._lazy_dset_path]
+            except Exception:
+                return
+            if not is_aggregatable_lazy_dset(dset):
+                return
+            try:
+                if dset.dtype.fields is not None:
+                    st = aggregate_h5_compound_numeric_chunks(dset)
+                    # Use the first numeric field for the compact display.
+                    names = dtype_numeric_field_names(dset.dtype)
+                    if names and names[0] in st:
+                        s = st[names[0]]
+                        self._cached_stats_text = (
+                            f" | mean={s['mean']:.4g} std={s['std']:.4g} "
+                            f"min={s['min']:.4g} max={s['max']:.4g}"
+                        )
+                else:
+                    st = aggregate_h5_numeric_chunks(dset)
+                    self._cached_stats_text = (
+                        f" | mean={st['mean']:.4g} std={st['std']:.4g} "
+                        f"min={st['min']:.4g} max={st['max']:.4g}"
+                    )
+            except Exception:
+                pass
+
+    def _current_dataset_stats_text(self) -> str:
+        """Return cached compact stats, or ''."""
+        return getattr(self, "_cached_stats_text", "")
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -3948,7 +4412,9 @@ class H5TUIApp(App):
         lines.append("")
         return "\n".join(lines)
 
-    def _dataset_preview_block(self, dset: h5py.Dataset) -> str:
+    def _dataset_preview_block(
+        self, dset: h5py.Dataset, *, display_mode: int = _DISPLAY_DECIMAL
+    ) -> str:
         lw = int(self._preview_line_width)
         lines = [self._dataset_preview_metadata_block(dset)]
         if dset.size == 0:
@@ -3957,14 +4423,33 @@ class H5TUIApp(App):
         if len(dset.dtype) != 0:
             lines.append("(no browse preview — press l for full view)")
             return "\n".join(lines)
+        kwargs = {}
+        if display_mode == _DISPLAY_HEX:
+            kwargs["formatter"] = {"int": _scalar_hex_str}
+        elif display_mode == _DISPLAY_SCIENTIFIC:
+            kwargs["formatter"] = {"int": _scalar_sci_str}
         try:
             if dset.size <= PREVIEW_BROWSE_TEXT_MAX_ELEMENTS:
                 arr = np.asarray(dset[...])
-                lines.append(format_ndarray_text(arr, line_width=lw))
+                if is_aggregatable(arr):
+                    a = arr.ravel()
+                    lines.insert(
+                        1,
+                        f"stats: mean={np.mean(a):.4g} std={np.std(a):.4g} "
+                        f"min={np.min(a):.4g} max={np.max(a):.4g}",
+                    )
+                    lines.insert(2, "")
+                lines.append(
+                    format_ndarray_text(arr, line_width=lw, display_mode=display_mode)
+                )
                 return "\n".join(lines)
             if dset.ndim == 1:
                 n = min(24, dset.shape[0])
-                lines.append(format_ndarray_text(np.asarray(dset[:n]), line_width=lw))
+                lines.append(
+                    format_ndarray_text(
+                        np.asarray(dset[:n]), line_width=lw, display_mode=display_mode
+                    )
+                )
                 lines.append("… (press l for full view)")
             elif dset.ndim == 2:
                 r = min(6, dset.shape[0])
@@ -3976,6 +4461,7 @@ class H5TUIApp(App):
                         threshold=200,
                         edgeitems=2,
                         suppress_small=False,
+                        **kwargs,
                     )
                 )
                 lines.append("… (press l for full view)")
@@ -3994,6 +4480,8 @@ class H5TUIApp(App):
             ("escape", "exit_dataset_view", "Close"),
             # Single ``:`` is normalized to the key name ``colon`` in Textual's binding map.
             ("colon", "jump_to_line", "Jump to row"),
+            # Uppercase ``S`` is normalized to ``upper_s``.
+            ("upper_s", "dataset_slice", "Slice"),
         ):
             lst = self._bindings.key_to_bindings.get(key)
             if not lst:
@@ -4029,6 +4517,11 @@ class H5TUIApp(App):
         self._lazy_2d_window_col = 0
         self._lazy_structured_1d = False
         self._lazy_struct_field_start = 0
+        self._active_slice = None
+        self._active_slice_expr = ""
+        self._active_reshape = None
+        self._active_reshape_expr = ""
+        self._cached_stats_text = ""
         self.remove_class("view-dataset")
         self.remove_class("view-plot")
         self.remove_class("view-dtable")
@@ -4158,13 +4651,96 @@ class H5TUIApp(App):
                     text += f"\n… ({more} more)"
                 self._preview._content.update(text)
         elif isinstance(node, h5py.Dataset):
-            if _browse_preview_datatable_eligible(node):
-                self._preview.add_class("browse-preview-table")
-                self._preview._content.update(
-                    self._dataset_preview_metadata_block(node)
-                )
+            active_slice = getattr(self, "_active_slice", None)
+            active_reshape = getattr(self, "_active_reshape", None)
+            if active_slice is not None or active_reshape is not None:
+                # Slice/reshape is active: read data, apply, store in _data, and render.
                 try:
-                    fill_browse_preview_datatable(node, self._preview._df)
+                    data = np.asarray(
+                        node[active_slice] if active_slice is not None else node[...]
+                    )
+                    if active_reshape is not None:
+                        data = np.reshape(data, active_reshape)
+                except (IndexError, ValueError) as e:
+                    self._preview._content.update(f"(slice/reshape error: {e})")
+                    return
+                self._data = data
+                lw = int(self._preview_line_width)
+                md_lines = [
+                    f"sl shape: {data.shape}",
+                    f"sl dtype: {data.dtype}",
+                ]
+                if self._active_slice_expr:
+                    md_lines.append(f"slice: {self._active_slice_expr}")
+                if self._active_reshape_expr:
+                    md_lines.append(f"reshape: {self._active_reshape_expr}")
+                md_lines.append(f"size: {_dataset_size_display(node)}")
+                if is_aggregatable(data):
+                    a = data.ravel()
+                    md_lines.append(
+                        f"stats: mean={np.mean(a):.4g} std={np.std(a):.4g} "
+                        f"min={np.min(a):.4g} max={np.max(a):.4g}"
+                    )
+                md_lines.append("")
+                meta = "\n".join(md_lines)
+                if (
+                    is_dataframe(data)
+                    or should_use_1d_table(data)
+                    or should_use_2d_table(data)
+                ):
+                    self._preview.add_class("browse-preview-table")
+                    self._preview._content.update(meta)
+                    if is_dataframe(data):
+                        self._preview._df.clear(columns=True)
+                        self._preview._df.update(data, display_mode=self._display_mode)
+                    elif should_use_1d_table(data):
+                        self._preview._df.clear(columns=True)
+                        self._preview._df.update_1d(
+                            _as_display_1d(np.asarray(data)),
+                            display_mode=self._display_mode,
+                        )
+                    elif should_use_2d_table(data):
+                        self._preview._df.clear(columns=True)
+                        self._preview._df.update_2d(
+                            np.asarray(data), display_mode=self._display_mode
+                        )
+                    self._preview.scroll_x = 0
+                    self._preview.scroll_y = 0
+                    self._preview._df.scroll_x = 0
+                    self._preview._df.scroll_y = 0
+                else:
+                    self._preview._content.update(
+                        meta
+                        + format_ndarray_text(
+                            np.asarray(data),
+                            line_width=lw,
+                            display_mode=self._display_mode,
+                        )
+                    )
+            elif _browse_preview_datatable_eligible(node):
+                self._preview.add_class("browse-preview-table")
+                meta = self._dataset_preview_metadata_block(node)
+                # Add stats line for small datasets (full read is cheap).
+                if (
+                    node.dtype.fields is None
+                    and np.issubdtype(node.dtype, np.number)
+                    and node.size > 1
+                ):
+                    try:
+                        arr = np.asarray(node[...])
+                        if is_aggregatable(arr):
+                            a = arr.ravel()
+                            meta += (
+                                f"stats: mean={np.mean(a):.4g} std={np.std(a):.4g} "
+                                f"min={np.min(a):.4g} max={np.max(a):.4g}\n\n"
+                            )
+                    except Exception:
+                        pass
+                self._preview._content.update(meta)
+                try:
+                    fill_browse_preview_datatable(
+                        node, self._preview._df, display_mode=self._display_mode
+                    )
                     self._preview.scroll_x = 0
                     self._preview.scroll_y = 0
                     self._preview._df.scroll_x = 0
@@ -4176,7 +4752,9 @@ class H5TUIApp(App):
                         + f"(could not read data: {e})"
                     )
             else:
-                self._preview._content.update(self._dataset_preview_block(node))
+                self._preview._content.update(
+                    self._dataset_preview_block(node, display_mode=self._display_mode)
+                )
 
     def on_option_list_option_highlighted(
         self, event: OptionList.OptionHighlighted
@@ -4402,10 +4980,12 @@ class H5TUIApp(App):
 
         self._preview.reprint()
 
+        self._compute_and_cache_stats()
         self.update_header(
             self._header_content(
                 path,
-                dataset_meta=format_dataset_header_metadata(dset),
+                dataset_meta=format_dataset_header_metadata(dset)
+                + self._current_dataset_stats_text(),
             )
         )
         # Focus DataTable when it is the active view; focusing the parent ColumnContent
@@ -4449,6 +5029,7 @@ class H5TUIApp(App):
                 field_names,
                 field_start=fs,
                 n_fields_total=nf,
+                display_mode=self._display_mode,
             )
             if cursor_row is not None and self._preview._df.row_count > 0:
                 cr = max(0, min(int(cursor_row), self._preview._df.row_count - 1))
@@ -4460,7 +5041,7 @@ class H5TUIApp(App):
                     self._preview._df.move_cursor(row=cr, column=0, scroll=True)
             return
         self._preview._df.border_title = ""
-        self._preview._df.update_1d_window(chunk, base)
+        self._preview._df.update_1d_window(chunk, base, display_mode=self._display_mode)
         if cursor_row is not None and self._preview._df.row_count > 0:
             cr = max(0, min(int(cursor_row), self._preview._df.row_count - 1))
             self._preview._df.move_cursor(row=cr, column=0, scroll=True)
@@ -4506,7 +5087,9 @@ class H5TUIApp(App):
         r2 = min(wr, nr - br)
         c2 = min(wc, nc - bc)
         chunk = np.asarray(dset[br : br + r2, bc : bc + c2])
-        self._preview._df.update_2d_window(chunk, br, bc)
+        self._preview._df.update_2d_window(
+            chunk, br, bc, display_mode=self._display_mode
+        )
         if cursor_row is not None and self._preview._df.row_count > 0:
             cr = max(0, min(int(cursor_row), self._preview._df.row_count - 1))
             ncols = len(self._preview._df.columns)
@@ -4616,6 +5199,96 @@ class H5TUIApp(App):
             )
             return
         self.push_screen(JumpToLineScreen())
+
+    def apply_slice(self, slice_tuple: tuple, expr_str: str) -> None:
+        """Store the active slice and re-render the current dataset view."""
+        self._active_slice = slice_tuple
+        self._active_slice_expr = expr_str
+
+    def clear_slice(self) -> None:
+        """Clear the active slice and restore the full dataset."""
+        self._active_slice = None
+        self._active_slice_expr = ""
+
+    def apply_reshape(self, reshape_tuple: tuple, expr_str: str) -> None:
+        """Store the active reshape and re-render the current dataset view."""
+        self._active_reshape = reshape_tuple
+        self._active_reshape_expr = expr_str
+
+    def clear_reshape(self) -> None:
+        """Clear the active reshape."""
+        self._active_reshape = None
+        self._active_reshape_expr = ""
+
+    def apply_slice_reshape(
+        self, ops: list, full_expr: str, raw_slice: str, raw_reshape: str
+    ) -> None:
+        """Apply parsed slice/reshape operations and re-render."""
+        # Apply each operation in left-to-right order.
+        for op_type, args in ops:
+            if op_type == "slice":
+                self._active_slice = args
+                self._active_slice_expr = raw_slice
+            else:
+                self._active_reshape = args
+                self._active_reshape_expr = raw_reshape
+
+        # If an operation type is missing from ops, clear it.
+        if not any(t == "slice" for t, _ in ops):
+            self.clear_slice()
+        if not any(t == "reshape" for t, _ in ops):
+            self.clear_reshape()
+
+        # Record full expression in history (deduplicate tail).
+        if not self._slice_history or self._slice_history[-1] != full_expr:
+            self._slice_history.append(full_expr)
+
+        if self.has_class("view-dataset"):
+            self._preview.reprint()
+            self._compute_and_cache_stats()
+            self.update_header(self._header_content_for_current_view())
+            if self.has_class("view-dtable"):
+                self._preview._df.focus()
+            else:
+                self._preview.focus()
+        else:
+            self.refresh_preview()
+
+    def action_dataset_slice(self) -> None:
+        """Open the slice/reshape input dialog for the current dataset (``S``)."""
+        if isinstance(self.screen, _MODAL_SCREENS_ALL):
+            return
+        if self.has_class("view-dataset"):
+            # In dataset view: if already sliced/reshaped, clear it; otherwise open dialog.
+            if self._active_slice is not None or self._active_reshape is not None:
+                self.clear_slice()
+                self.clear_reshape()
+                self._preview.reprint()
+                self._compute_and_cache_stats()
+                self.update_header(self._header_content_for_current_view())
+                if self.has_class("view-dtable"):
+                    self._preview._df.focus()
+                else:
+                    self._preview.focus()
+                return
+            self.push_screen(DatasetSliceScreen())
+            return
+        # Browse mode.
+        if not self.has_class("view-dataset"):
+            path = self.get_selected_dataset_path()
+            if path:
+                if self._active_slice is not None or self._active_reshape is not None:
+                    self.clear_slice()
+                    self.clear_reshape()
+                    self.refresh_preview()
+                    return
+                try:
+                    node = self._file[path]
+                    if isinstance(node, h5py.Dataset):
+                        self.push_screen(DatasetSliceScreen())
+                        return
+                except Exception:
+                    pass
 
     def update_header(self, header: Content) -> None:
         self._header_widget.update(header)
@@ -4770,7 +5443,7 @@ class H5TUIApp(App):
     def _resolve_save_plot_data(
         self, *, sample: bool
     ) -> tuple[np.ndarray | None, str | None]:
-        """Load array data for PDF export.
+        """Load array data for PNG export.
 
         ``sample=False`` (default in the save dialog) prefers full ``dset[...]`` when
         feasible. ``sample=True`` matches the terminal preview caps
@@ -4872,6 +5545,19 @@ class H5TUIApp(App):
 
         if data_arr is None:
             return None, None
+        # Apply active slice and reshape.
+        sl = getattr(self, "_active_slice", None)
+        rp = getattr(self, "_active_reshape", None)
+        if sl is not None or rp is not None:
+            try:
+                arr = np.asarray(data_arr)
+                if sl is not None:
+                    arr = arr[sl]
+                if rp is not None:
+                    arr = np.reshape(arr, rp)
+                data_arr = arr
+            except (IndexError, ValueError):
+                return None, None
         arr = np.asarray(data_arr)
         if arr.dtype.fields is not None:
             if arr.ndim != 1 or not has_compound_plot_fields(arr.dtype):
@@ -4890,12 +5576,33 @@ class H5TUIApp(App):
         return arr, name
 
     def _get_aggregate_data_context(self) -> np.ndarray | None:
-        """Numeric array for summary: full dataset view, plot preview, or selected dataset."""
+        """Numeric array for summary; accounts for active slice/reshape."""
+        sl = getattr(self, "_active_slice", None)
+        rp = getattr(self, "_active_reshape", None)
         if self.has_class("view-dataset"):
-            if getattr(self, "_lazy_mode", False):
+            if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+                if sl is not None or rp is not None:
+                    try:
+                        dset = self._file[self._lazy_dset_path]
+                        data = np.asarray(dset[sl] if sl is not None else dset[...])
+                        if rp is not None:
+                            data = np.reshape(data, rp)
+                        return data
+                    except (IndexError, ValueError):
+                        return None
                 return None
             d = self._data
-            return None if d is None else np.asarray(d)
+            if d is None:
+                return None
+            data = np.asarray(d)
+            if sl is not None:
+                data = data[sl]
+            if rp is not None:
+                try:
+                    data = np.reshape(data, rp)
+                except ValueError:
+                    return None
+            return data
         if self.has_class("view-plot") and self._data is not None:
             # Browse-mode plot stores downsampled samples in ``_data`` only for drawing.
             return None
@@ -4903,20 +5610,45 @@ class H5TUIApp(App):
         if path is None:
             return None
         try:
-            return np.asarray(self._file[path][...])
+            data = np.asarray(self._file[path][...])
+            if sl is not None:
+                data = data[sl]
+            if rp is not None:
+                data = np.reshape(data, rp)
+            return data
+        except (IndexError, ValueError):
+            return None
         except Exception:
             return None
 
     def _preview_aggregate_element_count(self) -> int | None:
-        """Element count for summary guard (uses dataset metadata when not yet loaded)."""
+        """Element count for summary guard; accounts for active slice/reshape."""
+        sl = getattr(self, "_active_slice", None)
+        rp = getattr(self, "_active_reshape", None)
         if self.has_class("view-dataset"):
             if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+                if sl is not None or rp is not None:
+                    return self._view_dataset_element_count()
                 return int(self._file[self._lazy_dset_path].size)
             d = self._data
-            return None if d is None else int(np.asarray(d).size)
+            if d is None:
+                return None
+            if sl is not None or rp is not None:
+                return self._view_dataset_element_count()
+            return int(np.asarray(d).size)
         path = self.get_selected_dataset_path()
         if path is None:
             return None
+        if sl is not None or rp is not None:
+            try:
+                data = np.asarray(
+                    self._file[path][sl] if sl is not None else self._file[path][...]
+                )
+                if rp is not None:
+                    data = np.reshape(data, rp)
+                return int(data.size)
+            except (IndexError, ValueError):
+                return None
         return _dataset_path_element_count(self._file, path)
 
     def _h5_path_is_aggregatable_dataset(self, path: str) -> bool:
@@ -4940,27 +5672,99 @@ class H5TUIApp(App):
         return self.get_selected_dataset_path()
 
     def _view_dataset_plotable(self) -> bool:
+        sl = getattr(self, "_active_slice", None)
+        rp = getattr(self, "_active_reshape", None)
         if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
-            return is_plotable_lazy_dset(self._file[self._lazy_dset_path])
-        return self._data is not None and is_plotable(self._data)
+            dset = self._file[self._lazy_dset_path]
+            if sl is not None or rp is not None:
+                try:
+                    data = np.asarray(dset[sl] if sl is not None else dset[...])
+                    if rp is not None:
+                        data = np.reshape(data, rp)
+                    return is_plotable(data)
+                except (IndexError, ValueError):
+                    return False
+            return is_plotable_lazy_dset(dset)
+        if self._data is None:
+            return False
+        data = np.asarray(self._data)
+        if sl is not None:
+            data = data[sl]
+        if rp is not None:
+            try:
+                data = np.reshape(data, rp)
+            except ValueError:
+                return False
+        return is_plotable(data)
 
     def _view_dataset_element_count(self) -> int:
+        sl = getattr(self, "_active_slice", None)
+        rp = getattr(self, "_active_reshape", None)
         if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
+            if sl is not None or rp is not None:
+                try:
+                    data = np.asarray(
+                        self._file[self._lazy_dset_path][sl]
+                        if sl is not None
+                        else self._file[self._lazy_dset_path][...]
+                    )
+                    if rp is not None:
+                        data = np.reshape(data, rp)
+                    return int(data.size)
+                except (IndexError, ValueError):
+                    return 0
             return int(self._file[self._lazy_dset_path].size)
         if self._data is None:
             return 0
-        return int(np.asarray(self._data).size)
+        data = np.asarray(self._data)
+        if sl is not None:
+            try:
+                data = data[sl]
+            except (IndexError, ValueError):
+                return 0
+        if rp is not None:
+            try:
+                data = np.reshape(data, rp)
+            except ValueError:
+                return 0
+        return int(data.size)
 
     def _view_dataset_histogram_eligible(self) -> bool:
+        sl = getattr(self, "_active_slice", None)
+        rp = getattr(self, "_active_reshape", None)
         if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
-            d = self._file[self._lazy_dset_path]
-            if d.dtype.fields is not None and d.ndim == 1:
-                return has_compound_plot_fields(d.dtype)
+            dset = self._file[self._lazy_dset_path]
+            if sl is not None or rp is not None:
+                try:
+                    a = np.asarray(dset[sl] if sl is not None else dset[...])
+                    if rp is not None:
+                        a = np.reshape(a, rp)
+                except (IndexError, ValueError):
+                    return False
+                if a.dtype.fields is not None and a.ndim == 1:
+                    return has_compound_plot_fields(a.dtype)
+                return is_histogram_eligible(a)
+            if dset.dtype.fields is not None and dset.ndim == 1:
+                return has_compound_plot_fields(dset.dtype)
             return (
-                d.ndim == 1 and len(d.dtype) == 0 and np.issubdtype(d.dtype, np.number)
+                dset.ndim == 1
+                and len(dset.dtype) == 0
+                and np.issubdtype(dset.dtype, np.number)
             )
         if self._data is None:
             return False
+        if sl is not None or rp is not None:
+            try:
+                a = np.asarray(self._data)
+                if sl is not None:
+                    a = a[sl]
+                if rp is not None:
+                    a = np.reshape(a, rp)
+            except (IndexError, ValueError):
+                return False
+            if a.dtype.fields is not None and a.ndim == 1:
+                return has_compound_plot_fields(a.dtype)
+            return is_histogram_eligible(a)
         a = np.asarray(self._data)
         if a.dtype.fields is not None and a.ndim == 1:
             return has_compound_plot_fields(a.dtype)
@@ -5110,15 +5914,39 @@ class H5TUIApp(App):
             return
         dset = node
 
+        # When slice/reshape is active, use transformed data for all checks below.
+        sl = getattr(self, "_active_slice", None)
+        rp = getattr(self, "_active_reshape", None)
+        sliced_data: np.ndarray | None = None
+        if sl is not None or rp is not None:
+            try:
+                sliced_data = np.asarray(dset[sl] if sl is not None else dset[...])
+                if rp is not None:
+                    sliced_data = np.reshape(sliced_data, rp)
+            except (IndexError, ValueError):
+                self.notify("Slice/reshape error on plot", severity="error", timeout=3)
+                return
+
         if histogram:
-            if dset.ndim != 1:
+            if sliced_data is not None:
+                # With active slice: check the sliced result.
+                if not is_histogram_eligible(np.squeeze(sliced_data)):
+                    self.notify(
+                        "Histogram is only available for 1D numeric datasets",
+                        severity="warning",
+                        timeout=2,
+                    )
+                    return
+            elif dset.ndim != 1:
                 self.notify(
                     "Histogram is only available for 1D datasets",
                     severity="warning",
                     timeout=2,
                 )
                 return
-            if dset.dtype.fields is not None:
+            if sliced_data is not None:
+                pass  # Skip dset-based compound checks; use sliced_data below.
+            elif dset.dtype.fields is not None:
                 if not has_compound_plot_fields(dset.dtype):
                     self.notify(
                         "Histogram requires numeric compound fields",
@@ -5149,7 +5977,19 @@ class H5TUIApp(App):
                     )
                 )
                 return
-            if not (
+            if sliced_data is not None:
+                # For eligibility we checked sliced_data above.
+                # Store the full dset data so _make_replot_fn applies slice/reshape
+                # (avoiding double-transformation).
+                try:
+                    sampled = self._sample_dset_or_open_data_for_plot_1d(path, dset)
+                except Exception as e:
+                    self.notify(
+                        f"Could not read dataset: {e}", severity="error", timeout=8
+                    )
+                    return
+                self._data = sampled
+            elif not (
                 len(dset.dtype) == 0
                 and dset.dtype != np.dtype("O")
                 and np.issubdtype(dset.dtype, np.number)
@@ -5160,12 +6000,15 @@ class H5TUIApp(App):
                     timeout=2,
                 )
                 return
-            try:
-                sampled = self._sample_dset_or_open_data_for_plot_1d(path, dset)
-            except Exception as e:
-                self.notify(f"Could not read dataset: {e}", severity="error", timeout=8)
-                return
-            self._data = sampled
+            else:
+                try:
+                    sampled = self._sample_dset_or_open_data_for_plot_1d(path, dset)
+                except Exception as e:
+                    self.notify(
+                        f"Could not read dataset: {e}", severity="error", timeout=8
+                    )
+                    return
+                self._data = sampled
             self._plot_histogram = True
             if not self.has_class("view-plot"):
                 self.notify("Histogram…", timeout=1.5)
@@ -5177,7 +6020,15 @@ class H5TUIApp(App):
             self.refresh_bindings()
             return
 
-        if not is_plotable_lazy_dset(dset):
+        if sliced_data is not None:
+            if not is_plotable(sliced_data):
+                self.notify(
+                    "Only 1D/2D numeric data or 1D compound (numeric fields) can be plotted",
+                    severity="warning",
+                    timeout=2,
+                )
+                return
+        elif not is_plotable_lazy_dset(dset):
             self.notify(
                 "Only 1D and 2D numeric data can be plotted",
                 severity="warning",
@@ -5263,7 +6114,16 @@ class H5TUIApp(App):
             return
         if self.has_class("view-dataset"):
             if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
-                if not is_aggregatable_lazy_dset(self._file[self._lazy_dset_path]):
+                if self._active_slice is not None or self._active_reshape is not None:
+                    data = self._get_aggregate_data_context()
+                    if data is None or not is_aggregatable(data):
+                        self.notify(
+                            "Select or open a numeric dataset to summarize",
+                            severity="warning",
+                            timeout=3,
+                        )
+                        return
+                elif not is_aggregatable_lazy_dset(self._file[self._lazy_dset_path]):
                     self.notify(
                         "Select or open a numeric dataset to summarize",
                         severity="warning",
@@ -5280,30 +6140,42 @@ class H5TUIApp(App):
                     )
                     return
         elif self.has_class("view-plot") and self._data is not None:
-            path = self.get_selected_dataset_path()
-            if path is None:
-                self.notify(
-                    "Select or open a numeric dataset to summarize",
-                    severity="warning",
-                    timeout=3,
-                )
-                return
-            try:
-                cand = self._file[path]
-            except Exception:
-                self.notify(
-                    "Select or open a numeric dataset to summarize",
-                    severity="warning",
-                    timeout=3,
-                )
-                return
-            if not (isinstance(cand, h5py.Dataset) and is_aggregatable_lazy_dset(cand)):
-                self.notify(
-                    "Select or open a numeric dataset to summarize",
-                    severity="warning",
-                    timeout=3,
-                )
-                return
+            if self._active_slice is not None or self._active_reshape is not None:
+                data = self._get_aggregate_data_context()
+                if data is None or not is_aggregatable(data):
+                    self.notify(
+                        "Select or open a numeric dataset to summarize",
+                        severity="warning",
+                        timeout=3,
+                    )
+                    return
+            else:
+                path = self.get_selected_dataset_path()
+                if path is None:
+                    self.notify(
+                        "Select or open a numeric dataset to summarize",
+                        severity="warning",
+                        timeout=3,
+                    )
+                    return
+                try:
+                    cand = self._file[path]
+                except Exception:
+                    self.notify(
+                        "Select or open a numeric dataset to summarize",
+                        severity="warning",
+                        timeout=3,
+                    )
+                    return
+                if not (
+                    isinstance(cand, h5py.Dataset) and is_aggregatable_lazy_dset(cand)
+                ):
+                    self.notify(
+                        "Select or open a numeric dataset to summarize",
+                        severity="warning",
+                        timeout=3,
+                    )
+                    return
         else:
             path = self.get_selected_dataset_path()
             if path is None or not self._h5_path_is_aggregatable_dataset(path):
@@ -5319,6 +6191,15 @@ class H5TUIApp(App):
             return
 
         def _open_summary() -> None:
+            # When slice/reshape is active, use the in-memory path so the
+            # summary reflects the transformed data, not the full dataset.
+            sl = getattr(self, "_active_slice", None)
+            rp = getattr(self, "_active_reshape", None)
+            if sl is not None or rp is not None:
+                data = self._get_aggregate_data_context()
+                if data is not None and is_aggregatable(data):
+                    self.push_screen(DatasetSummaryScreen(data))
+                return
             if getattr(self, "_lazy_mode", False) and self._lazy_dset_path:
                 dset = self._file[self._lazy_dset_path]
                 if not is_aggregatable_lazy_dset(dset):
@@ -5610,6 +6491,24 @@ class H5TUIApp(App):
             )
             return
         self._start_plot_preview_from_path(path, histogram=True)
+
+    def action_toggle_hex(self) -> None:
+        """Cycle display format: decimal → hex → scientific notation."""
+        self._display_mode = (self._display_mode + 1) % 3
+        labels = {
+            _DISPLAY_DECIMAL: "Decimal display",
+            _DISPLAY_HEX: "Hex display",
+            _DISPLAY_SCIENTIFIC: "Scientific notation",
+        }
+        self.notify(
+            labels[self._display_mode],
+            timeout=2,
+        )
+        # Refresh the current view to reflect the new mode.
+        if self.has_class("view-dataset"):
+            self._preview.reprint()
+        else:
+            self.refresh_preview()
 
 
 def check_file_validity(fname):
