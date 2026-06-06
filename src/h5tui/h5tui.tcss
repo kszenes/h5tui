@@ -160,6 +160,7 @@ Toast {
 AttributeScreen,
 DatasetSummaryScreen,
 JumpToLineScreen,
+DatasetSliceScreen,
 GlobalFuzzyFindScreen {
   align: center middle;
 }
@@ -169,7 +170,8 @@ GroupFindScreen {
   align: right bottom;
 }
 
-JumpToLineScreen #jump-line-dialog {
+JumpToLineScreen #jump-line-dialog,
+DatasetSliceScreen #slice-dialog {
   width: 44%;
   max-width: 52;
   min-width: 32;
