@@ -60,6 +60,29 @@ Additional keybindings:
 | :-- | :--------------------------------- |
 | `:` | **Jump to row**                    |
 | `y` | **Copy** focused cell to clipboard |
+| `x` | Cycle **display format**: dec → hex → sci |
+| `S` | **Slice/reshape** with numpy expressions|
+
+### display format
+
+Press `x` to cycle integer/float display format between decimal, hexadecimal, and scientific notation.
+
+### Slicing & Reshaping
+
+Press `S` to open the slice/reshape dialog. Use `[...]` for numpy-style slicing and `(...)` for reshaping. Both can be combined in left-to-right order.
+| Expression            | Meaning                                  |
+| :-------------------- | :--------------------------------------- |
+| `[0:100]`             | Slice rows 0–99                          |
+| `[0:10, ::2]`         | Multi-dim slice                          |
+| `(-1,)`               | Flatten to 1D                            |
+| `(10, 10)`            | Reshape to 10×10                         |
+| `[0:100](10, 10)`     | Slice 100 rows, then reshape to 10×10    |
+| `[0,:,:,0](:)`        | Slice then flatten (`:` in reshape = -1) |
+| `0:10`                | Legacy: bare slice (backward compatible) |
+
+Press `S` again to clear the active slice/reshape.
+
+
 
 ### Plotting
 
@@ -82,9 +105,9 @@ For **compound** datatypes, any field can be chosen as the x and y axis.
 
 > Note for large datasets, only an evenly sampled subset of the datapoints is plotted.
 
-#### Export as PDF
+#### Export as PNG
 
-Press `s` to open dialog to **Save Plot As PDF** via [matplotlib](https://github.com/matplotlib/matplotlib).
+Press `s` to open dialog to **Save Plot As PNG** via [matplotlib](https://github.com/matplotlib/matplotlib).
 
 <img width="1511" height="908" alt="compound plot axis menu" src="https://github.com/user-attachments/assets/90f6805e-165d-435a-84bd-3a16a2ec1502" />
 
@@ -101,6 +124,8 @@ Press `A` while viewing a dataset for a **numerical summary** including (e.g., m
 This is performed per field for compound types.
 
 <img width="1920" height="1048" alt="aggregation summary" src="https://github.com/user-attachments/assets/9698c153-74b2-4e8e-a433-55fe6149135e" />
+
+Statistics (**mean**, **std**, **min**, **max**) are shown inline next to shape/dtype/size in both the dataset view header and the browse preview sidebar.
 
 ### Shared navigation
 
